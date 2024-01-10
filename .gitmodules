@@ -1,0 +1,12 @@
+[submodule "grade-2/semester-1/C_Snake-C++"]
+	path = grade-2/semester-1/C_Snake-C++
+	url = https://github.com/C-Snake/C-Snake-main
+[submodule "grade-2/semester-1/capstoneExhibition(모두의_환승)"]
+	path = grade-2/semester-1/capstoneExhibition(모두의_환승)
+	url = https://github.com/ymw0407/Everyones-Transfer_Main.git
+[submodule "grade-1/semester-2/ESWContest(Home++)"]
+	path = grade-1/semester-2/ESWContest(Home++)
+	url = https://github.com/webOS-KOSS/HomePlusPlus
+[submodule "grade-2/semester-2/Open-Set-Go"]
+	path = grade-2/semester-2/Alpha_Project(Open-Set-Go)
+	url = https://github.com/AgainIoT/Open-Set-Go
