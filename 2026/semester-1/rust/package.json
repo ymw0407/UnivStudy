@@ -1,0 +1,28 @@
+{
+  "name": "rust-wiki",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "prism-react-renderer": "^2.4.1",
+    "prismjs": "^1.30.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/prismjs": "^1.26.6",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vanilla-extract/css": "^1.17.0",
+    "@vanilla-extract/vite-plugin": "^4.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "~5.7.0",
+    "vite": "^6.1.0"
+  }
+}
