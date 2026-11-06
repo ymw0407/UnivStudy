@@ -1,0 +1,129 @@
+> 메모리 가상화(memory virtualization)
+> OS가 물리 메모리(physical memory)를 추상화해서 각 프로세스에게 독립적인 메모리 공간이 있는 것처럼 보이게 한다
+
+## Memory Virtualization
+
+- 프로그래밍을 쉽게 만든다
+- 시간/공간 측면에서 메모리를 효율적으로 쓸 수 있게 한다
+- 프로세스 간, 그리고 OS와 프로세스 간의 **격리(isolation)** 를 보장한다
+
+> **protection / isolation**
+
+- 다른 프로세스가 내 메모리를 함부로 읽거나 쓰지 못하게 하고
+- 한 프로세스의 잘못된 접근이 다른 프로세스나 OS에 피해를 주지 못하게 하며
+- 이 과정을 수행하는 비용(시간/공간 오버헤드)이 너무 크지 않게 만드는 것
+
+## 초기 시스템: 한 번에 하나의 프로세스만 적재
+
+> 물리 메모리에 **한 번에 하나의 프로세스만** 올려서 실행
+
+- 처음에는 메모리도 작고 시스템도 단순했다
+- 굳이 복잡한 추상화가 없어도, 한 번에 프로그램 하나만 돌리면 됐다
+- 그래서 그냥 디스크에 있는 실행 파일을 메모리로 가져와 적재하고 실행하면 됐다
+
+- 컴파일-링킹-실행 파일 생성 흐름
+	- 소스코드를 컴파일하면 object file이 만들어지고
+	- 필요한 라이브러리들과 링크하여 executable file을 만들고
+	- 이 실행 파일은 디스크에 저장되어 있다가
+	- OS가 그것을 메모리에 올려 실행한다
+
+## Multiprogramming이 필요해지면 문제가 생긴다
+
+- 물리 메모리를 여러 구역으로 나눈다
+	- Process A는 여기
+	- Process B는 여기
+	- Process C는 여기
+
+> **protection issue**
+
+- 프로세스 A가 악의적으로든 실수로든
+- 자기 구역이 아닌 물리 메모리 영역을 건드릴 수 있다
+- 그러면 다른 프로세스의 코드나 데이터를 읽거나 망가뜨릴 수 있다
+- 심하면 OS 자체가 깨질 수 있다
+
+> 물리 메모리를 단순 분할해서 직접 쓰게 하면 **격리와 보호가 깨진다**
+
+<a id="address-space" />
+## Address Space
+
+> 각 프로세스는 물리 메모리를 직접 보는 것이 아니라,  
+> 자기만의 **virtual address space** 를 보는 것
+
+- 실제 물리 메모리는 뒤에 따로 존재한다
+- 사용자는 그 물리 메모리를 직접 참조하지 않는다
+- 대신 **virtual address space** 라는 추상화된 공간만 본다
+- 그리고 OS가 뒤에서 **mapping function** 을 통해 virtual address를 physical memory에 연결해 준다
+
+> 이렇게 하면 프로세스는 자기 주소 공간만 보게 되므로, 다른 프로세스의 메모리를 직접 건드리기 어려움
+
+- **Code(Text)**: 실행할 명령어가 들어 있는 영역
+- **Heap**: 동적 메모리 할당 영역 (`malloc`, `new`)
+- **Stack**: 함수 호출, 지역 변수, 반환 주소 등을 저장하는 영역
+
+
+### 모든 주소는 virtual address다
+
+- `main` 함수의 주소를 찍어 본다 → code 영역
+- `malloc(1)`의 반환값을 찍어 본다 → heap 영역
+- 지역 변수 `x`의 주소를 찍어 본다 → stack 영역
+
+> 코드/힙/스택이 virtual address space 안에 논리적으로 구분되어 존재한다는 것을 실제로 확인
+
+### 32-bit address space
+
+> 각 주소가 1 byte를 가리킨다고 보면 전체 크기는 2^32 bytes=4GB
+
+2^32 = 2^30 * 2^2 = 1G * 4 = 4GB
+
+예시 시스템에서 virtual address space를 대략
+
+- 아래 2GB: user space
+- 위 2GB: kernel space
+
+> 32비트 주소 공간 전체는 4GB이지만, 그중 사용자 프로세스가 직접 쓰는 user space는 보통 그 절반 정도로 제한될 수 있다
+
+
+### 1. Code
+
+`main` 함수의 주소를 찍으면 code(text) 영역 근처가 나온다.
+
+### 2. Data
+
+초기화된 전역변수는 **data segment** 에 들어간다.
+
+### 3. BSS
+
+초기화되지 않은 전역변수는 **BSS** 에 들어간다.
+
+### 4. Stack
+
+지역변수는 **stack** 에 들어간다.
+
+### 5. Heap
+
+`malloc()` 으로 받은 메모리는 **heap** 에 들어간다.
+
+```c
+int *dynamicLocalVar1;
+dynamicLocalVar1 = malloc(sizeof(int));
+```
+
+- `malloc()` 이 반환한 **실제 메모리 블록**은 heap에 있다
+- 하지만 `dynamicLocalVar1` 이라는 **포인터 변수 자체**는 지역변수라서 stack에 있다
+
+- `dynamicLocalVar1` 의 **값** = heap 주소
+	- `printf("0x%x\n", dynamicLocalVar1)`
+- `&dynamicLocalVar1` 의 **주소** = stack 주소
+	-  `printf("0x%x\n", &dynamicLocalVar1)`
+
+```c
+printf("%p\n", (void *)dynamicLocalVar1);   // heap 쪽 주소
+printf("%p\n", (void *)&dynamicLocalVar1);  // stack 쪽 주소
+```
+
+-> 해당 파트는 PDF의 코드 부분 유심히 보기
+
+<Figure
+  caption="프로세스 C 코드에서 &amp; 연산자로 변수 주소를 찍었을 때, 각 변수가 속한 영역(code/data/bss/heap/stack)의 구분 예시"
+  source="OSTEP 8_AddressSpaces 강의자료"
+/>

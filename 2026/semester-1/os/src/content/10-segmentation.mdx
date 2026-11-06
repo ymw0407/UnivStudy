@@ -1,0 +1,214 @@
+> base-and-bounds 방식은 아주 단순하고 빠르다는 장점이 있지만, 주소 공간 전체를 하나의 덩어리처럼 다룬다는 한계가 있습니다.
+> 실제로는 코드, 힙, 스택처럼 성격이 서로 다른 영역들이 있는데도, 이를 한 통으로 보고 메모리에 배치합니다. 
+> 그러다 보니 사용하지 않는 빈 공간도 같이 따라다니게 되고, 결과적으로 메모리를 비효율적으로 쓰게 됩니다.
+
+> 전체를 한 덩어리로 다루지 말고, 필요한 부분만 따로따로 관리하면 되지 않을까?
+
+
+세그멘테이션을 하려면 각 세그먼트에 대해 적어도 두 가지 정보가 필요합니다.
+
+- **base**: 해당 세그먼트가 물리 메모리의 어디에 시작하는가
+- **bounds(size)**: 그 세그먼트의 크기가 얼마인가
+
+> 어떤 주소를 접근했을 때 이것이 코드 영역인지, 힙 영역인지, 스택 영역인지를 먼저 알고, 그 세그먼트의 base를 더해서 실제 물리 주소를 구하는 것
+> 동시에 bounds를 검사해서 그 세그먼트 범위를 넘지 않았는지도 확인해야함
+
+
+## Code Segment
+
+예를 들어 코드 세그먼트의 시작이 가상 주소 0이라고 합시다. 
+그렇다면 코드 영역에서 100번째 바이트를 접근할 때는 다음과 같이 code base를 더하면 됨
+
+`physical address = code base + 100`
+
+## Heap 
+
+가상 주소 공간에서 힙의 시작이 예를 들어 4KB 지점부터 시작한다고 해봅시다.  
+그러면 힙 안에서 어떤 주소를 접근할 때는, 단순히 그 가상 주소 값을 base에 바로 더하면 안됨
+왜냐하면 힙의 "세그먼트 내부 offset"을 먼저 구해야 하기 때문
+
+```
+힙 주소 4200을 참조한다고 하면,  
+
+그 힙 세그먼트의 시작이 4KB = 4096이라면,  
+실제로 더해야 할 값은 `4200 - 4096 = 104` 같은 **offset**입니다
+```
+
+> 세그멘테이션에서는 "가상 주소 그 자체"를 base에 더하는 것이 아니라,
+> **그 세그먼트 안에서의 상대적 위치(offset)** 를 구한 뒤 더해야 한다는 점
+
+> "어느 세그먼트인지 판별 → offset 계산 → bounds 검사 → base 더하기"
+> 세그멘테이션은 더 유연해졌지만, 대신 하드웨어적 처리는 더 복잡해졌다
+
+## Segmentaion fault
+
+> base-and-bounds 하나로 전체 주소 공간을 볼 때는, 어떤 주소가 그 전체 주소 공간 범위 안에 있기만 하면 "잘못된 주소"는 아니었음
+
+- 코드 세그먼트는 코드 세그먼트 범위만 유효
+- 힙 세그먼트는 힙 세그먼트 범위만 유효
+- 스택 세그먼트는 스택 세그먼트 범위만 유효
+
+
+힙의 base/bounds로 판단할 때 그 범위를 넘어가는 주소라면,  
+비록 전체 주소 공간 안 어딘가에 있는 값이라 하더라도  
+**그 힙 세그먼트 관점에서는 잘못된 주소**
+
+> base-and-bound는 그 사이 어딘가 찍어도 괜찮았다면
+> segmentation approach에서는 그 사이 어딘가가 free space다! 그럼 이것도 segmentation fault
+> -> 더 자세히 말하면, code segment는 code segment 밖을 벗어나는 순간 segmentation fault
+
+## Explicit approach
+
+> 세그먼트를 비트로 명시적으로 나누자
+> -> 가상 주소의 상위 비트 몇 개를 세그먼트 번호로 쓰는 것
+
+
+예를 들어 가상 주소의 맨 앞 **top 2 bit**를 세그먼트 구분에 쓴다고 해봅시다.
+
+- `00` → code segment
+- `01` → heap segment
+- `10` → stack segment
+
+-> 주소를 보자마자 어느 세그먼트인지 알 수 있음
+
+> 뒤쪽 나머지 비트를 **offset**으로 해석
+> 그 세그먼트의 base에 더하면 물리 주소를 얻을 수 있음
+
+
+```c
+segment = (VirtualAddress & SEG_MASK) >> SEG_SHIFT
+// virtual address:    01000001101000
+// segementation mask: 11000000000000
+// and result:         01000000000000
+// shift 12 :          00000000000001 -> 어 01이네 -> heap segmentation!
+
+offset = virtualAddress & OFF_MASK
+// virtual address:    01000001101000
+// segementation mask: 00111111111111
+// and result:         00000001101000 -> 1101000이 offset!
+
+if (offset > bounds[segment]) // offset이 범위를 벗어나면?
+	RaiseException(PROTECTION_FAULT) // segmentation fault 발생
+else
+	physicalAddress = Base[segment] + offset // heap의 base memory에 offset을 더함
+	Register = AccessMemory(physicalAddress)
+```
+
+## Stack
+
+> 스택은 일반적으로 **아래 방향으로 성장**
+
+> 스택 세그먼트를 처리할 때는 단순히 offset을 더하는 방식만으로는 안됨
+> -> 그 세그먼트가 **positive direction으로 자라는지, negative direction으로 자라는지** 필요
+
+grow positive: 1 -> code(00) / heap(01)
+grow negative: 0 -> stack(10)
+
+- direction bit
+- protection bit
+
+### protection bit는 왜 필요?
+
+> code sharing!!!!
+
+- Vim을 여러 개 띄운다고 하면, 각각의 프로세스는 별개의 프로세스이지만 **실행 파일의 코드 자체는 동일**함
+- 이 동일한 코드 세그먼트를 매 프로세스마다 따로 물리 메모리에 올리면 낭비
+- 코드는 실행 중에 바뀌지 않으므로, 여러 프로세스가 **같은 물리 코드 세그먼트를 공유**해도 됨
+
+> 이렇게 공유하는 대신에, code sharing된 physical memory의 정보는 수정되면 안됨
+> 그래서 protection bit가 필요한 것!!
+
+- code segment → read, execute 가능 / write 불가
+- heap segment → read, write 가능
+- stack segment → read, write 가능
+
+> protection bit는 단순 보안 기능이 아니라,  
+> **공유 가능한 코드 세그먼트를 안전하게 유지하기 위해서도 필요**
+
+
+## Implicit Approach
+
+> explicit approach처럼 상위 비트 두 개를 세그먼트 식별에 써버리면, 그만큼 실제 주소 표현에 쓸 수 있는 공간이 줄어듬
+
+> -> 세그먼트 번호를 주소에 직접 적지 말고, 어떤 레지스터를 통해 그 주소를 참조했는지를 보고 추론하자
+
+- program counter를 통해 가져온 주소 → code segment
+- stack pointer를 통해 가져온 주소 → stack segment
+
+> 문맥과 사용된 레지스터로부터 **암묵적으로 유추**하는 방식
+
+- **Explicit approach**: virtual address의 top few bits로 segment를 정함. 예시로 top 2 bits를 써서 code=00, heap=01, stack=10처럼 구분한다.
+- **Implicit approach**: 주소가 어떻게 만들어졌는지를 보고 segment를 추론한다.  
+    예를 들어 program counter에서 만들어진 주소면 code, stack/base pointer면 stack, 그 외는 heap처럼 본다.
+
+## segmentation은 여전히 coarse-grained 하다
+
+- 통짜 base-and-bounds보다 세분화되어 있고
+- 코드/힙/스택을 논리적으로 분리하고
+- 각 세그먼트를 독립적으로 배치할 수 있고
+- 코드 sharing도 가능하다
+
+하지만 여전히 부족함.
+
+> 바로 segmentation은 본질적으로 **coarse-grained** 하다는 점입니다.  
+> 즉, 세그먼트라는 단위 자체가 여전히 큽니다.
+
+## external fragmentaion
+
+> segmentation의 가장 큰 문제는 **external fragmentation**!!
+
+예를 들어 free space가 총 24KB 있다고 합시다.  
+그런데 그 free space가 연속된 한 덩어리라면 20KB짜리 세그먼트를 쉽게 넣을 수 있음
+하지만 free space가 반토막 나있으면? 절대로 못넣음
+
+
+<Figure
+  src="/figures/ch10-external-fragmentation.png"
+  caption="External fragmentation: 전체 free space 총량은 충분해도 조각나 있어서 큰 세그먼트를 넣을 수 없는 상황"
+  source="OSTEP 10_Segmentation 강의자료"
+/>
+
+
+> 즉, **남는 공간의 총량은 충분하지만, 조각나 있어서 못 쓰는 문제**가 생김 
+> -> **external fragmentation**!!
+
+- 물리 메모리에 작은 hole들이 생기고
+- 총 24KB free가 있어도
+- 한 contiguous segment가 아니면 20KB 요청을 못 만족시킨다.
+
+즉 여기서의 핵심은 단순히 "segment가 커서"라기보다,
+
+- **세그먼트가 variable-sized**
+- **그리고 segment 하나를 contiguous block으로 넣어야 해서**
+- hole이 쪼개지면 못 넣는다
+
+는 점이다.
+
+### why not compaction?
+
+> 중간중간 떨어져 있는 세그먼트들을 한쪽으로 몰아서 free space를 연속적으로 만들까?
+
+- 실행 중인 프로그램의 세그먼트를 옮겨야 하고
+- 메모리 내용을 복사해야 하고
+- 옮긴 뒤에는 각 세그먼트의 **base 주소도 전부 다시 바꿔야 함**
+
+
+- segmentation에서는 **각 segment를 physical memory의 연속된 공간(contiguous block)** 으로 넣으려고 한다
+- 그런데 segment들은
+    - 크기가 제각각이고
+    - 생성/삭제 시점도 다르고
+    - 힙처럼 커질 수도 있다
+- 그러다 보니 physical memory에 **중간중간 애매한 빈칸들**이 생긴다
+- 그런데 새로 들어오려는 segment는 **하나의 큰 연속 공간**이 필요하니까,  
+    총 빈 공간은 충분해도 못 들어가는 상황이 생긴다
+- 이게 바로 **external fragmentation**이다
+
+> physical memory에 segment를 "큰 단위의 연속 공간"으로 배치하려고 하기 때문에 external fragmentation이 잘 생긴다
+
+> 세그먼트처럼 큰 단위가 아니라 더 작은 고정 크기 단위로 쪼개서 관리하면, 흩어진 빈 공간도 더 유연하게 활용할 수 있지 않을까?
+
+
+- 초창기엔 segmentation을 실제로 썼고
+- Burroughs B5000, IBM AS/400, Intel 8086/80286 같은 사례가 있으며
+- 이후 80386부터 paging을 지원하고
+- x86-64 64bit mode에서는 segmentation을 사실상 거의 쓰지 않는다

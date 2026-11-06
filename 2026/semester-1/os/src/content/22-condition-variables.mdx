@@ -1,0 +1,671 @@
+<Callout kind="summary" title="이 장의 목적">
+앞 장에서 mutex 로 <i>"같이 못 들어오게"</i> 막는 법을 봤다면, 이번 장은 <b>"어떤 조건이 만족될 때까지 잠들었다가 누가 신호를 주면 깨어나는"</b> 메커니즘 — Condition Variable — 을 다룹니다. CV + state variable + lock 의 <b>3 박자</b> 가 왜 항상 같이 가야 하는지, Mesa semantics 에서 <code>while</code> 이 왜 필수인지, 그리고 producer-consumer 의 정석 패턴을 정리합니다.
+</Callout>
+
+Lock만으로는 해결하기 어려운 상황이 있음  
+
+- 예를 들어 어떤 thread가 "특정 조건이 만족될 때까지 기다려야 하는 상황"
+
+이때 단순히 Lock만 걸어두면, 조건이 만족되지 않았는데도 계속 CPU를 쓰면서 기다리거나, 
+혹은 다른 thread가 필요한 일을 하지 못하게 막을 수 있습니다.
+
+> Condition Variable이 필요한 대표적인 상황은, 
+> thread가 계속 실행하기 전에 어떤 조건이 참인지 확인해야 하는 경우
+
+> Condition Variable
+> "어떤 조건이 만족될 때까지 스레드를 잠재우고, 다른 스레드가 그 조건을 만족시켰을 때 깨워주는 대기 큐"
+
+예를 들어 parent thread가 child thread를 하나 만들었다고 해보겠습니다.
+
+이때 parent thread가 child thread가 끝나기 전에 먼저 종료되면 안 되는 상황이 있을 수 있습니다.  
+즉, parent는 child가 끝났는지 확인하고, 아직 끝나지 않았다면 기다려야 합니다.
+
+이런 구조가 우리가 앞에서 봤던 `join()`과 비슷합니다.
+
+```c
+volatile int done = 0; 
+// 처음 done을 0으로 초기화
+// 여기선 done이 state variable
+// done으로 뭐가 돌아가고 안돌아가고를 정함
+void *child(void *arg) {
+    printf("child\n");
+    done = 1;
+    return NULL;
+}
+int main(int argc, char *argv[]) {
+    printf("parent: begin\n");
+    
+    pthread_t c;
+    Pthread_create(&c, NULL, child, NULL); // create child
+    
+    while (done == 0) // child에서 done = 1을 해줄때까지 spin
+        ; // spin
+    printf("parent: end\n");
+    return 0;
+}
+```
+
+```
+expect
+---
+parent: begin
+child
+parent: end
+```
+
+<Callout kind="warning" title="이 코드의 문제 — busy waiting">
+일단 결과는 맞지만 <code>while (done == 0)</code> 가 child 가 끝날 때까지 <b>CPU 를 태우면서</b> 빙빙 돕니다. 자원 낭비도 문제고, single-CPU 라면 child 가 실행될 틈을 안 줘서 더 심각합니다. <i>"기다리는 동안 CPU 를 양보하고 잠들었다가, 깨워주면 일어나는"</i> 메커니즘이 필요합니다 — 이것이 Condition Variable.
+</Callout>
+
+> Condition variable은 쉽게 말하면 **어떤 조건을 기다리는 thread들이 들어가는 queue** 
+
+- Thread가 원하는 상태가 아직 아니라면, 그 thread는 condition variable의 queue에 들어가고 sleep 상태가 됨
+- 나중에 다른 thread가 상태를 바꾸면, condition variable에 signal을 보내서 기다리던 thread 중 하나를 깨울 수 있음
+
+> 여기서 중요한 점은 condition variable 하나만으로는 충분하지 않다는 것
+
+1. condition variable -> 조건을 기다리는 thread들이 들어가는 queue
+2. state variable -> 상태를 나타냄 
+3. lock
+
+```
+condition variable c  
+state variable done  
+lock L
+```
+
+- Condition variable
+    - 대기 중인 thread들의 queue
+	- Waiting on the condition
+	    - 원하는 상태가 아닐 때 thread가 explicit queue에 들어가 sleep
+	- Signaling on the condition
+	    - 다른 thread가 상태를 바꿨을 때, 기다리는 thread 하나를 깨워 실행 재개
+
+```
+Condition Variable = 기다리는 thread들을 담는 queue
+State Variable = 실제 조건이 만족됐는지 나타내는 값
+Lock = state variable 확인과 wait/signal 과정을 안전하게 보호하는 장치
+```
+
+<CondVarTrio caption="CV(잠/깨우기 큐) + state variable(실제 조건) + lock(둘을 한 묶음으로 보호) — 셋이 한 세트여야 race 가 안 생긴다. 셋 중 하나만 빠져도 lost wakeup 이나 무한 sleep 같은 문제가 따라온다." />
+
+> POSIX에서는 condition variable을 `pthread_cond_t` 타입으로 선언
+
+- Condition variable의 핵심 함수
+	- pthread_cond_wait()
+		- 현재 thread를 condition variable의 wait queue에 넣고 sleep
+		- mutex를 인자로 받는다
+			- -> wait을 호출할 때는 반드시 lock을 잡아야함
+		- wait 함수는 sleep에 들어가면서 lock을 자동으로 release
+	- pthread_cond_signal()
+		- 해당 condition variable에서 기다리는 thread 중 하나를 깨움
+		- wait에서 깨어난 thread는 바로 실행되는 것이 아니라, 
+			- 다시 lock을 획득한 뒤 `pthread_cond_wait()`에서 return
+
+```c
+pthread_cond_t c;
+pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m); // wait()
+pthread_cond_signal(pthread_cond_t *c);                   // signal()
+```
+
+Wait → Sleep + Unlock  
+Signal → Wakeup + lock
+
+pthread_cond_wait()  
+= 현재 thread를 sleep 상태로 보냄  
++ sleep에 들어가면서 mutex를 release  
++ 나중에 깨어날 때 mutex를 다시 acquire  
+  
+pthread_cond_signal()  
+= condition variable에서 기다리는 thread 중 하나를 깨움
+
+> wait()은 반드시 lock을 잡은 상태에서 호출해야 한다.  
+> 깨어난 thread는 wait()에서 return하기 전에 lock을 다시 잡는다.
+
+<WaitSignalMechanics caption="cond_wait 은 'sleep + unlock' 이 atomic 한 묶음 — 그래서 race 없이 잠들 수 있다. cond_signal 은 큐의 thread 하나에게 '너 이제 깨어나도 돼' 라고 알릴 뿐, 그 thread 가 바로 실행되는 것은 아니다. 그리고 큐가 비어 있을 땐 신호가 그냥 사라진다." />
+
+```c
+int done = 0;
+pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t c = PTHREAD_COND_INITIALIZER;
+// 이게 condition variable
+void thr_exit() {
+    Pthread_mutex_lock(&m);
+    done = 1;
+    // state variable을 1로 바꾸고,
+    // signal을 보냄
+    Pthread_cond_signal(&c);
+    Pthread_mutex_unlock(&m);
+}
+void *child(void *arg) {
+    printf("child\n");
+    thr_exit();
+    return NULL;
+}
+void thr_join() {
+    Pthread_mutex_lock(&m);
+    while (done == 0) // done이 1이 아니면
+        Pthread_cond_wait(&c, &m); // wait -> sleep에 들어감 -> unlock
+        // signal이 옴 -> lock걸고 while 검증 -> unlock하고 끝 
+    Pthread_mutex_unlock(&m);
+}
+int main(int argc, char *argv[]) {
+    printf("parent: begin\n");
+    pthread_t p;
+    Pthread_create(&p, NULL, child, NULL);
+    thr_join();
+    printf("parent: end\n");
+    return 0;
+}
+```
+
+> 이 코드는 condition variable을 이용해 직접 구현한 간단한 join입니다.
+
+```
+parent
+1. child thread 생성
+2. thr_join() 호출
+3. lock 획득
+4. child가 끝났는지 done 확인
+5. 끝나지 않았으면 wait
+6. wait에 들어가며 lock release
+7. signal을 받으면 깨어나 lock reacquire
+8. done 확인 후 종료
+---
+child
+1. "child" 출력
+2. thr_exit() 호출
+3. lock 획득
+4. done = 1
+5. signal로 parent 깨움
+6. unlock
+```
+
+### without state variable -> 무한 슬립에 빠질 수 있음
+
+만약 `done` 없이 condition variable만 사용한다고 해보겠습니다. Child가 먼저 실행되어 signal을 보낼 수 있습니다. 그런데 그 시점에 parent가 아직 wait 상태가 아니라면, condition variable queue에는 아무도 없습니다.
+
+이 경우 signal은 저장되지 않고 그냥 사라집니다. Condition variable의 signal은 이벤트 기록 장치가 아니라, 현재 기다리고 있는 thread를 깨우는 동작이기 때문입니다.
+
+그 후 parent가 실행되어 wait을 호출하면, parent는 sleep에 들어갑니다. 하지만 child는 이미 끝났고 signal도 이미 지나갔습니다. 따라서 parent를 다시 깨워줄 thread가 없습니다.
+
+결과적으로 parent는 영원히 잠들게 됩니다.
+
+> 따라서 `done`은 "child가 이미 끝났는가?"라는 상태를 기록하기 위해 필요합니다.
+>  Child가 먼저 끝났더라도 `done = 1`이 남아 있으면, 
+>  parent는 나중에 실행되더라도 wait하지 않고 지나갈 수 있습니다.
+
+```c
+void thr_exit() {
+    Pthread_mutex_lock(&m);
+    Pthread_cond_signal(&c);
+    Pthread_mutex_unlock(&m);
+}
+void thr_join() {
+    Pthread_mutex_lock(&m);
+    Pthread_cond_wait(&c, &m);
+    Pthread_mutex_unlock(&m);
+}
+```
+
+-> state variable 없는 상태에서 thr_exit이 먼저 실행되어 버리면, thr_join이 늦게 실행되면서 parent는 영원히 잠든 상태가 된다
+
+<LostSignalNoState caption="child 가 먼저 실행되어 signal 을 쏘는 순간, queue 가 비어 있으면 신호는 그냥 사라진다. 뒤늦게 parent 가 wait 으로 들어가면 깨워 줄 사람이 없어 영영 sleep — state variable 이 '이미 일어난 일' 을 기록해 두지 않으면 막을 수 없는 race." />
+
+### Without lock -> 
+
+Parent는 `done == 0`인지 확인하고, 아직 child가 끝나지 않았다면 wait합니다. Child는 `done = 1`로 바꾸고 signal을 보냅니다.
+
+parent가 `done == 0`을 확인했습니다. 그래서 이제 wait으로 들어가려는 순간 context switch가 발생했다고 해봅시다. 아직 parent는 wait queue에 들어가지 않았습니다.
+
+그 사이 child가 실행됩니다. Child는 `done = 1`로 바꾸고 signal을 보냅니다. 하지만 parent는 아직 condition variable queue에 들어가지 않았으므로, signal을 받을 thread가 없습니다.
+
+그 후 parent가 다시 실행되어 wait을 호출하면, 이미 child는 끝났고 signal도 사라졌습니다. 결국 parent는 영원히 잠들게 됩니다.
+
+| time | parent thread   | child thread |
+| ---- | --------------- | ------------ |
+| 1    | check done == 0 |              |
+| 2    |                 | done = 1     |
+| 3    |                 | signal(c)    |
+| 4    | wait(c, m)      |              |
+| ...  | never wake up   |              |
+
+<LostWakeupNoLock caption="lock 없이 check 와 wait 을 따로 두면 그 사이가 race window. 그 틈에 child 가 통째로 끝나 버리면(t2~t3) parent 는 영영 깨어나지 못한다. lock 은 'check + wait 으로 들어가기' 를 한 덩어리로 묶어 이 race 자체를 없앤다." />
+
+```c
+void thr_exit() {
+    done = 1;
+    Pthread_cond_signal(&c);
+}
+void thr_join() {
+    if (done == 0)
+	    // 이 사이에서 done이 1로 바뀌면? -> 깨워줄 쓰레드가 없음
+        Pthread_cond_wait(&c);
+}
+```
+
+```
+done 확인과 wait 진입 사이에 context switch가 발생하면 lost wakeup이 생긴다.
+따라서 condition variable에는 lock이 반드시 필요하다.
+```
+
+<Callout kind="tip" title="lock 이 정확히 무엇을 막아주는가">
+lock 은 단순히 'state 변수를 동시에 쓰지 못하게' 만 하는 게 아닙니다. <code>done</code> 검사 → <code>cond_wait</code> 호출 사이를 <b>한 덩어리</b>로 묶어, child 가 그 사이에 끼어들 수 없게 합니다. 그리고 <code>cond_wait</code> 가 'mutex 풀기 + 잠들기' 를 atomic 하게 처리하기 때문에, 잠들기 직전에 신호가 와도 놓치지 않습니다. 이 두 가지 덕에 lock + state + CV 의 패턴이 안전해집니다.
+</Callout>
+
+
+## The Producer / Consumer Problem
+
+- Producer
+	- 데이터를 만들어서 buffer에 넣는 thread
+- Consumer
+	- buffer에서 데이터를 꺼내 처리하는 thread
+
+> producer와 consumer가 같은 buffer를 공유
+> 여러 thread가 동시에 buffer에 접근하면 race condition이 발생
+
++)
+
+> Buffer가 가득 차 있으면 producer는 더 이상 데이터를 넣으면 안됨
+> Buffer가 비어있으면 consumer는 더 이상 데이터를 꺼내면 안됨
+
+-> Bounded Buffer를 통해 해결
+
+첫째, buffer에 동시에 접근하지 못하게 하는 lock이 필요합니다.  
+둘째, buffer가 full 또는 empty일 때 기다릴 수 있는 condition variable이 필요합니다.
+
+> Bounded Buffer + Lock + Condition Variable
+
+<ProducerConsumerLayout caption="Producer 와 Consumer 가 가운데 buffer 를 공유한다. buffer 접근은 lock 으로 보호하고, full/empty 상황에서는 CV 로 잠재웠다가 다른 쪽이 깨운다 — 이 절의 모든 코드가 이 그림을 다양하게 다듬어 가는 과정." />
+
+### Bounded Buffer
+
+Bounded buffer는 크기가 제한된 buffer입니다. 이 개념은 shell의 pipe에서도 볼 수 있습니다.
+
+```bash
+grep foo file.txt | wc -l
+```
+
+grep -> producer
+wc -> consumer
+
+이 둘 사이에는 kernel 내부의 bounded buffer가 있습니다. 
+
+`grep`이 너무 빨리 데이터를 만들면 buffer가 가득 찰 수 있습니다. 
+그러면 `grep`은 기다려야 합니다. 
+반대로 `wc`가 읽으려고 하는데 buffer가 비어 있으면 `wc`는 기다려야 합니다.
+
+```
+buffer full → producer blocked  
+buffer empty → consumer blocked  
+동시 접근 → lock + wait queue 필요
+```
+
+```c
+int buffer;
+int count = 0; // initially, empty
+// 0이면 비어있고
+// 1이면 차있다.
+// 1칸짜리 버퍼임
+// count가 state variable -> producer-consumer 문제에서 중요
+void put(int value) {
+    assert(count == 0);
+    // 비어있으면 통과
+    count = 1;
+    buffer = value;
+}
+int get() {
+    assert(count == 1);
+    // 차있으면 통과
+    count = 0;
+    return buffer;
+}
+```
+
+```c
+void *producer(void *arg) {
+    int i;
+    int loops = (int) arg;
+    for (i = 0; i < loops; i++) {
+        put(i);
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    while (1) {
+        int tmp = get();
+        printf("%d\n", tmp);
+    }
+}
+```
+
+Producer와 consumer가 동시에 buffer에 접근할 수 있음 
+-> lock이 없음
+-> race condition
+
+producer는 buffer가 full이면 기다려야 함
+consumer는 buffer가 empty이면 기다려야 함
+
+```c
+cond_t cond;
+mutex_t mutex;
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);          // p1
+        if (count == 1)                      // p2 -> if로 조건을 한번만 검사함
+            Pthread_cond_wait(&cond, &mutex); // p3
+        put(i);                              // p4
+        Pthread_cond_signal(&cond);          // p5
+        Pthread_mutex_unlock(&mutex);        // p6
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);          // c1
+        if (count == 0)                      // c2
+            Pthread_cond_wait(&cond, &mutex); // c3
+        int tmp = get();                     // c4
+        Pthread_cond_signal(&cond);          // c5
+        Pthread_mutex_unlock(&mutex);        // c6
+        printf("%d\n", tmp);
+    }
+}
+```
+
+```
+p1-p3: producer는 buffer가 empty가 될 때까지 기다림  
+c1-c3: consumer는 buffer가 full이 될 때까지 기다림  
+single producer + single consumer에서는 동작
+```
+
+```
+Tc1 state   Tp1 state   Cnt   Comment
+-----------------------------------------------
+C1 run                  0
+C2 run                  0
+C3 sleep                0     Buffer is empty
+             P1 run     0
+             P2 run     0
+             P4 run     1     Buffer is now full
+             P5 run     1     Tc1 awoken
+             P6 run     1
+             P1 run     1
+             P2 run     1
+             P3 sleep   1
+C4 run                  0     Buffer is now empty
+```
+
+이 상태까지는 괜찮음 하지만, consumer가 여러 개가 되면? 바로 깨짐
+
+<MultiConsumerBreaks caption="[19페이지 표] consumer 가 둘이면 single CV + if 패턴이 깨진다. producer 의 signal 로 Tc1 이 깨어났지만, Tc1 이 lock 을 재획득하기 전에 Tc2 가 먼저 잡고 get 을 끝내 버리면, Tc1 은 빈 buffer 에 get 을 호출해 assert 가 터진다." />
+
+지금 구조에선 consumer가 producer를 깨울 수도 consumer를 깨울 수도 있음
+
+Producer가 signal을 보내 consumer를 깨웠다고 해도, 그 consumer가 즉시 실행되는 것은 아닙니다. Signal은 "너 이제 깨어날 수 있어"라는 의미에 가깝고, 실제로 언제 CPU를 받아 실행될지는 scheduler가 결정합니다.
+
+> Mesa semantics
+> 대부분의 실제 시스템, 예를 들어 Windows나 Linux는 Mesa semantics를 사용
+> Mesa semantics에서는 깨어난 thread가 실행될 때, 그 thread가 원하던 상태가 여전히 유지된다는 보장이 없음
+> 따라서 깨어난 thread는 반드시 조건을 다시 확인해야 함
+
+if가 아닌 while로 검증해야함
+
+조건 확인은 if가 아니라 while로 한다.
+
+> **Hoare semantics**
+> signal을 받은 thread가 즉시 실행되는 강한 보장을 제공합니다. 
+> 하지만 구현이 복잡하기 때문에 대부분의 시스템에서는 사용하지 않습니다.
+
+<MesaVsHoareSemantics caption="Mesa(왼쪽) — 'signal 은 깨어날 수 있다는 알림' 일 뿐, 깨어나는 사이 다른 thread 가 상태를 또 바꿀 수 있어 while 재검사 필수. Hoare(오른쪽) — signal 직후 lock 까지 깨워진 thread 에게 넘겨 주는 강한 보장. 구현이 비싸 실제 OS 는 거의 모두 Mesa." />
+
+condition variable에서는 wait에서 깨어난 뒤 반드시 조건을 다시 확인해야 한다.
+
+```
+깨어남 = 조건 만족 보장 아님
+깨어난 뒤 재검사 필요
+재검사 결과 조건 불만족이면 다시 sleep
+```
+
+```c
+cond_t cond;
+mutex_t mutex;
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);          // p1
+        while (count == 1)                   // p2
+            Pthread_cond_wait(&cond, &mutex); // p3
+        put(i);                              // p4
+        Pthread_cond_signal(&cond);          // p5
+        Pthread_mutex_unlock(&mutex);        // p6
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);          // c1
+        while (count == 0)                   // c2
+            Pthread_cond_wait(&cond, &mutex); // c3
+        int tmp = get();                     // c4
+        Pthread_cond_signal(&cond);          // c5
+        Pthread_mutex_unlock(&mutex);        // c6
+        printf("%d\n", tmp);
+    }
+}
+```
+
+아직도 문제가 있음
+
+> producer와 consumer가 같은 condition variable을 사용
+> Consumer가 consumer를 깨우는 것은 의미가 없음
+> buffer가 비어 있는데 consumer가 깨어나면 다시 잠들 뿐
+
+single condition variable에서는 어떤 종류의 thread가 깨어날지 모름
+
+```c
+cond_t empty, fill; // condition variable 2개 됨
+mutex_t mutex;
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);
+        while (count == 1)
+			// producer는 empty이길 기다림
+            Pthread_cond_wait(&empty, &mutex);
+        put(i);
+        Pthread_cond_signal(&fill); // 차면 consumer를 부르기
+        Pthread_mutex_unlock(&mutex);
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);
+        while (count == 0)
+	        // consumer는 fill이길 기다림
+            Pthread_cond_wait(&fill, &mutex);
+        int tmp = get();
+        Pthread_cond_signal(&empty); // 비면 producer를 부르기
+        Pthread_mutex_unlock(&mutex);
+        printf("%d\n", tmp);
+    }
+}
+```
+
+<TwoCondVarsEmptyFill caption="CV 를 둘로 쪼개면 '엉뚱한 쪽을 깨우는' 문제가 사라진다. producer 는 empty 에서 잠들고 fill 에 signal. consumer 는 fill 에서 잠들고 empty 에 signal. 깨우는 신호가 항상 반대편(필요한 쪽) 에게만 간다." />
+
+```
+Producer:
+buffer full이면 empty에서 기다림
+put 이후 fill에 signal
+
+Consumer:
+buffer empty이면 fill에서 기다림
+get 이후 empty에 signal
+```
+
+```
+Tc1 state   Tc2 state   Tp state   Cnt   Comment
+---------------------------------------------------------
+C1 run                              0
+C2 run                              0
+C3 sleep                            0     Buffer is empty
+             C1 run                 0
+             C2 run                 0
+             C3 sleep               0     Buffer is empty
+                         P1 run     0
+                         P2 run     0
+                         P4 run     1     Buffer is full
+                         P5 run     1     Tc1 is woken up
+                         P6 run     1
+                         P1 run     1
+                         P2 run     1
+                         P3 sleep   1
+             C2 run                 1
+             C4 run                 0     Buffer is now empty
+             C5 run                 0     Tc2 is not woken up
+             C6 run                 0
+             C7 run                 0
+...
+```
+
+single CV:
+consumer가 consumer를 깨울 수 있음
+
+two CV:
+consumer는 empty에 signal
+→ producer 쪽을 깨움
+producer는 fill에 signal
+→ consumer 쪽을 깨움
+
+```c
+// buffer slot을 여러 개
+int buffer[MAX];
+int fill = 0; // 다음에 producer가 데이터를 넣을 위치입니다. // tail
+int use = 0; // 다음에 consumer가 데이터를 꺼낼 위치입니다. // head
+int count = 0; // 현재 buffer 안에 들어 있는 item 개수입니다. // 
+void put(int value) {
+    buffer[fill] = value;
+    fill = (fill + 1) % MAX;
+    // `fill`과 `use`는 circular buffer처럼 동작
+    count++;
+}
+int get() {
+    int tmp = buffer[use];
+    use = (use + 1) % MAX;
+    count--;
+    return tmp;
+}
+```
+
+<CircularBuffer caption="fill 은 producer 가 다음에 넣을 자리, use 는 consumer 가 다음에 꺼낼 자리. 두 포인터 모두 MAX 에 도달하면 0 으로 wrap → 같은 배열을 무한히 재활용. use→fill 사이가 데이터 영역." />
+
+```c
+cond_t empty, fill;
+mutex_t mutex;
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) { // loop는 매우 큰 값
+        Pthread_mutex_lock(&mutex);           // p1
+        while (count == MAX)                  // p2
+            Pthread_cond_wait(&empty, &mutex); // p3
+        put(i);                               // p4
+        Pthread_cond_signal(&fill);           // p5
+        Pthread_mutex_unlock(&mutex);         // p6
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);          // c1
+        while (count == 0)                   // c2
+            Pthread_cond_wait(&fill, &mutex); // c3
+        int tmp = get();                     // c4
+        Pthread_cond_signal(&empty);         // c5
+        Pthread_mutex_unlock(&mutex);        // c6
+        printf("%d\n", tmp);
+    }
+}
+```
+
+Bottle lock?  
+Concurrent Queue가 유리  
+Multi-CPUs, Thread 수 증가  
+→ Parallel Computing
+
+> bounded buffer는 전체 buffer에 lock 하나를 걸지만, 
+> concurrent queue는 더 세밀하게 동기화할 수 있음.
+
+correctness는 만족하지만,
+하나의 mutex가 전체 buffer를 보호하므로 scalability는 제한될 수 있음.
+
+```
+최종 Producer/Consumer 코드는 correctness는 맞다.
+하지만 하나의 mutex가 전체 buffer를 보호하므로 병목이 될 수 있다.
+CPU와 thread 수가 많아질수록 이 병목이 더 두드러진다.
+그래서 실제 고성능 병렬 환경에서는 Concurrent Queue 같은 구조가 더 유리할 수 있다.
+```
+
+
+### covering condition
+
+```c
+// how many bytes of the heap are free?
+int bytesLeft = MAX_HEAP_SIZE;
+// need lock and condition too
+cond_t c;
+mutex_t m;
+void *
+allocate(int size) {
+    Pthread_mutex_lock(&m);
+    while (bytesLeft < size)
+        Pthread_cond_wait(&c, &m);
+    void *ptr = ...;  // get mem from heap
+    bytesLeft -= size;
+    Pthread_mutex_unlock(&m);
+    return ptr;
+}
+void free(void *ptr, int size) {
+    Pthread_mutex_lock(&m);
+    bytesLeft += size;
+    Pthread_cond_signal(&c); // whom to signal??
+    // 누구를 깨워야할지 모른다.
+    // pthread_cond_broadcast()로 모두를 깨우면 되지 않을까?!
+    // -> 모든 thread가 깨어나서 각자 자신의 조건을 다시 확인
+    Pthread_mutex_unlock(&m);
+}
+```
+
+<CoveringConditionBroadcast caption="free() 가 100 바이트를 돌려줬을 때, 50 바이트 기다리는 T1·30 바이트 기다리는 T3 는 진행할 수 있지만 200·500 바이트 기다리는 T2·T4 는 못 한다. 누구를 깨워야 할지 모르니 broadcast 로 다 깨우고, 각자 while 재검사로 자기가 진행 가능한지 본다. ✓ 안전, ⚠ 불필요한 wakeup 비용." />
+
+물론 broadcast는 비용이 큽니다. 
+필요 없는 thread까지 모두 깨우기 때문입니다. 
+하지만 어떤 thread를 깨워야 할지 모르는 상황에서는 안전한 해결책입니다.
+
+장점:
+
+```
+어떤 thread를 깨워야 할지 몰라도 안전함
+각 thread가 while 조건을 다시 확인함
+조건이 맞는 thread만 진행함
+```
+
+단점:
+
+```
+너무 많은 thread가 깨어날 수 있음
+불필요한 wakeup 비용 발생
+```
+
+
+## 한 줄 요약
+
+<Callout kind="summary" title="Condition Variables 한눈에">
+• <b>CV + state variable + lock</b> 은 한 세트 — 셋 중 하나라도 빠지면 lost wakeup / 무한 sleep.<br/>
+• <b>cond_wait</b> = "mutex 풀기 + 잠들기" atomic. <b>cond_signal</b> 은 큐의 1 개만 깨우고, 큐가 비면 신호는 사라진다 (저장 X).<br/>
+• <b>Mesa semantics</b>(거의 모든 실제 OS) → 깨어났다고 조건 보장 아님 → <b>반드시 <code>while</code> 로 재검사</b>.<br/>
+• Producer/Consumer 는 <b>CV 두 개(empty · fill)</b> 로 쪼개야 'consumer 가 consumer 깨우기' 같은 잘못된 wakeup 을 막을 수 있다.<br/>
+• 깨울 대상이 불분명한 covering condition 에서는 <b>broadcast</b> 로 다 깨우고 각자 재검사하게 한다 (안전 ↔ wakeup 비용 trade-off).
+</Callout>

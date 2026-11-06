@@ -1,0 +1,298 @@
+> **가상 주소 공간을 고정 크기 단위인 page로 나누고**,  
+> **물리 메모리도 같은 크기의 page frame으로 나눈다**
+
+segmentation에서는 code, heap, stack처럼 의미가 다른 영역을 각각 하나의 연속된 덩어리로 보았습니다. 그래서 각 segment 크기가 제각각이었고, 물리 메모리에도 적당한 빈 연속 공간이 필요했습니다.
+
+> 반면 paging에서는 그런 의미 구분보다, 그냥 전부 똑같은 크기의 page들로 자름
+> 물리 메모리 어디에든 빈 frame만 있으면 하나씩 끼워 넣을 수 있음
+
+"가상 페이지 번호가 물리 프레임 번호 어디로 가는가"  
+를 기록할 표가 필요하고, 그것이 바로 **page table**!!
+
+- 장점
+	- 유연성
+		- heap이 얼마나 커질지, stack이 얼마나 내려올지, code가 얼마나 클지 미리 정교하게 맞출 필요가 없음
+		- 어차피 page단위로 관리
+	- free-space management의 단순화
+		- segmentation에서는 20KB짜리 요청을 위해 20KB 연속 공간이 필요
+		- paging에서는 예를 들어 4KB frame 다섯 개만 있으면 됨
+			- 이 5개가 서로 떨어져도 됨. -> 어차피 page table을 통해서 조회함
+	- external fragmentation 줄임
+		- paging은 물리 메모리를 고정 크기 블록으로 나누기 때문
+
+
+> free-space management가 어려웠던 이유 중 하나가 "연속 공간" 때문이었는데, paging은 그 가정을 없앰!!!
+
+> "가상 공간에서는 연속처럼 보이지만, 물리 공간에서는 흩어져 있어도 된다"
+
+가상 주소는 두 부분으로 나뉩니다.
+- **VPN**: virtual page number
+- **offset**: 그 페이지 내부에서 몇 번째 바이트인가
+
+먼저 "어느 페이지인가"를 찾고,  
+그 페이지가 연결된 물리 프레임 번호를 얻은 뒤,  
+마지막으로 offset은 그대로 붙이는 방식
+
+**페이지 단위로 위치만 바꾸고, 페이지 내부 상대 위치는 그대로 유지**할 수 있음
+
+> 아주 규칙적이고 단순한 주소 변환이 가능
+
+## page table
+
+> 문제: page table이 굉장히 커질 수 있다는 점
+
+```
+예를 들어 32비트 주소 공간에서 페이지 크기가 4KB라면,  
+가상 페이지 개수가 매우 많아집니다.
+
+2^32(32비트 주소 공간 -> 2^32까지 표현 가능한 주소)
+2^12(페이지의 크기 4K -> 2^12)
+
+VPN(virtual page number)의 비트 수
+-> 32비트 중 몇 비트가 VPN을 나타내는 비트 수인가?
+
+Offset은 바이트 단위로 표기!!
+-> page 크기가 4KB라는 것은
+-> 4K개의 offset이 존재한다는것
+-> 4K는 2^12
+-> 2^12 만큼의 offset이 필요하고
+-> 이를 표현하려면 12비트가 필요!
+-> offset은 12비트가 필요!
+
+어? 32비트 주소 공간에서 12비트가 offset이네?
+나머지 20비트는 뭐지?
+-> VPN
+-> 가상 공간을 최대 2^20개의 페이지까지로 표현가능
+ 
+한 프로세스에서 사용할 수 있는 가상 페이지 수가 최대 2^20개이다. 페이지 크기가 4KB일 때.
+
+---
+여기서 만약 페이지 테이블의 매핑 개당 크기가 4Byte이다?
+-> 2^20 * 4byte 
+-> 4MB
+-> page table의 전체 크기는 4MB
+-> 꽤 큼!!
+```
+
+> 프로세스당 하나의 page table을 가짐
+> 그렇기 때문에 이렇게 4MB씩 테이블이 큰거는 사고임
+> -> 프로세스 100개
+> -> 400MB를 메모리에서 점유하게 됨...
+
+```
+낮은 물리 주소
+┌──────────────────────────────────────────────┐
+│ Kernel code / Kernel data                    │
+│  - 커널 텍스트, 전역 데이터, 각종 자료구조   │
+├──────────────────────────────────────────────┤
+│ Page table for Process A                     │
+│  - A의 linear or multi-level page tables     │
+├──────────────────────────────────────────────┤
+│ Kernel stack for Process A                   │
+│  - A가 system call / interrupt 들어오면 사용 │
+├──────────────────────────────────────────────┤
+│ User page of Process A (code)                │
+├──────────────────────────────────────────────┤
+│ User page of Process B (heap)                │
+├──────────────────────────────────────────────┤
+│ Page table for Process B                     │
+├──────────────────────────────────────────────┤
+│ Kernel stack for Process B                   │
+├──────────────────────────────────────────────┤
+│ User page of Process A (stack)               │
+├──────────────────────────────────────────────┤
+│ User page of Process C (data)                │
+├──────────────────────────────────────────────┤
+│ Free frame                                   │
+├──────────────────────────────────────────────┤
+│ Page table for Process C                     │
+├──────────────────────────────────────────────┤
+│ Kernel stack for Process C                   │
+├──────────────────────────────────────────────┤
+│ More user pages / buffer cache / etc.        │
+└──────────────────────────────────────────────┘
+높은 물리 주소
+
+```
+
+> 이렇게 physical memory 첫 프레임 근처에 page table이 생김
+> 페이지 테이블은 프로세스당 하나!!!
+
+- 먼저 page table entry를 읽고
+- 그다음 실제 데이터 위치를 읽는다
+
+
+```
+Process A의 Virtual Address Space
+
+높은 가상 주소
+┌──────────────────────────┐
+│ User Stack               │
+├──────────────────────────┤
+│          빈 공간         │
+├──────────────────────────┤
+│ Heap                     │
+├──────────────────────────┤
+│ Data / BSS               │
+├──────────────────────────┤
+│ Code (Text)              │
+└──────────────────────────┘
+낮은 가상 주소
+```
+
+```
+[Linux x86-64: 가상 주소 공간 개념도]
+
+낮은 가상 주소
+┌──────────────────────────────┐
+│ user code / heap / mmap /    │
+│ user stack                   │
+└──────────────────────────────┘
+          (큰 hole)
+┌──────────────────────────────┐
+│ kernel virtual address space │  ← 높은 가상 주소
+│  - direct mapping            │
+│  - vmalloc/ioremap 영역      │
+│  - vmemmap                   │
+│  - fixmap 등                 │
+│  - (여기 어딘가에)            │
+│    per-thread kernel stack   │
+└──────────────────────────────┘
+높은 가상 주소
+
+
+[Physical RAM]
+
+┌──────────────────────────────┐
+│ kernel code/data 일부        │
+├──────────────────────────────┤
+│ process A user page          │
+├──────────────────────────────┤
+│ process B page table page    │
+├──────────────────────────────┤
+│ process A kernel stack용 page│
+├──────────────────────────────┤
+│ free frame                   │
+├──────────────────────────────┤
+│ process C user stack page    │
+└──────────────────────────────┘
+
+-> **물리 메모리에서는** 각 page가 서로 멀리 떨어져 있을 수 있음
+```
+
+page table은 가장 단순하게 보면 **배열**입니다.  
+
+> 운영체제가 VPN을 인덱스로 사용해서 해당 page table entry를 찾고,  
+
+거기서 PFN과 여러 플래그를 읽어 옵니다.
+
+즉, 선형 page table의 기본 아이디어는 단순합니다.  
+가상 페이지 번호마다 "이 페이지가 물리 메모리 어디에 있는지"를 한 칸씩 적어 두는 것입니다.
+
+> 하지만 주소 공간이 커질수록 이 배열도 커지므로,  
+> 이 단순함이 성능과 공간 측면에서 부담이 될 수 있습니다.
+
+## Common Flags of Page Table Entry
+
+<Callout kind="note" title="용어 보충: PTE">
+PTE는 Page Table Entry의 약자입니다. 페이지 테이블의 한 칸이며, 가상 페이지 하나에 대응하는 메타데이터 묶음입니다. PFN(Physical Frame Number)과 아래 플래그들이 여기에 함께 들어갑니다.
+</Callout>
+
+PTE에는 PFN만 들어 있는 것이 아닙니다.  
+운영체제는 보호와 상태 관리를 위해 여러 비트를 함께 둡니다.
+
+예를 들면,
+
+- Valid bit: 이 매핑이 유효한가
+	- 0이면 접근 시 오류 발생
+- R/W: 쓰기 가능한가
+	- 0이면 읽기 전용
+- U/S(user/supervisor): 사용자 접근 가능한가
+	- (0이면 커널만 접근 가능)
+- Present: 현재 메모리에 있는가
+	- 0이면 디스크에 있음
+- Accessed: 최근 접근되었는가
+	- TLB용
+- Dirty: 쓰기가 발생했는가
+	- TLB용
+
+> PTE는 단순 주소 변환 표가 아니라,  
+> **보호(protection), 존재 여부(presence), 접근 이력(access history)** 까지 함께 관리하는 구조
+
+> 이후 TLB에서도 해당 정보를 기록하는 이유!!!
+
+## Paging: Too Slow
+
+> paging은 너무 느림!!!
+
+메모리 한 번 접근하려고 해도  
+먼저 page table entry를 읽어야 하기 때문입니다.  
+즉 원래라면 데이터 한 번 읽으면 끝날 일을,  
+paging 환경에서는
+
+1. PTE 읽기
+2. 실제 데이터 읽기
+
+두 번 해야 합니다.
+
+> 메모리 접근이 매우 자주 일어난다는 점을 생각하면, 이 추가 비용은 상당히 큼
+
+> 그렇기 때문에 TLB를 사용
+
+## Accessing Memory With Paging
+
+- 가상 주소에서 VPN을 뽑습니다.
+- page table base register를 이용해 해당 PTE 주소를 계산합니다.
+- PTE를 메모리에서 읽습니다.
+- Valid나 protection을 검사합니다.
+- 이상이 없으면 PFN과 offset을 합쳐 실제 물리 주소를 만듭니다.
+- 그 물리 주소로 진짜 데이터를 읽습니다.
+
+즉, paging의 주소 변환은 생각보다 단순하지만,  
+중간에 page table을 읽는 단계가 꼭 들어갑니다.  
+그래서 느립니다.
+
+또한 Valid가 false면 segmentation fault,  
+보호 비트가 맞지 않으면 protection fault가 발생합니다.  
+즉 paging은 주소를 바꾸는 역할뿐 아니라 **잘못된 접근을 막는 보호 장치** 역할도 수행
+
+```c
+VPN = (VirtualAddress & VPN_MASK) >> SHIFT
+// 마스킹을 통해 VPN 값만 구하기
+// 01010001001000000000 101010101001 // virtual address -> VPN(20) + OFFSET(12)
+// 11111111111111111111 000000000000 // VPN_MASK
+// 01010001001000000000 000000000000 // & 연산
+// 00000000000001010001 001000000000 // shift 연산 shift 12칸
+
+PTEAddr = PTBR + (VPN * sizeof(PTE))
+// PTEAddr // page table entry address 값을 구해보자
+// PTBR // Page Table Base Register // 페이지 테이블의 시작 지점에 대한 레지스터값
+// VPN * sizeof(PTE) // virtual page number에 page table entry 하나의 크기를 곱함
+// 그럼? page table offset이 나옴
+// PTBR + paget table offset = Page Table Entry Address
+
+PTE = AccessMemory(PTEAddr) // page table entry 값을 읽어옴 PTEAddress로부터
+// 이때 첫 메모리 접근이 일어남 !!!!!!
+
+// access 가능한지 확인하기
+if (PTE.Valid == False) 
+	RaiseException(SEGMENTATION_FAULT) // 매핑이 없는 곳을 접근 // segmentation fault
+else if (CanAccess(PTE.ProtectionBits) == False) // 접근 권한이 있나? // U/S비트 사용
+	RaiseException(Protection_FAULT) // 접근 권한 없음 // protection fault
+else // access 가능!!
+	offset = VirtualAddress & OFFSET_MASK // OFFSET 가져옴
+	// 01010001001000000000 101010101001 // virtual address -> VPN(20) + OFFSET(12)
+	// 00000000000000000000 111111111111 // OFFSET_MASK
+	// 00000000000000000000 101010101001 // & 연산
+	PhysAddr = (PTE.PFN << PFN_SHIFT) | offset 
+	// PTE.PFN // page table entry에서 PFN 가져오기
+	// PTE.PFN << PFN_SHIFT // page table entry를 왼쪽으로 쉬프트 //
+	// PTE.PFN << 12 // PFN만 뽑아온뒤 offset 자리 12칸 쉬프트
+	// offset // or 연산 // offset은 Virtual address에서 뽑은걸 그대로 사용
+	Register = AccessMemeory(PhysAddr)
+	// 실제 값이 존재하는 physical address 접근 // 2번째 접근임!!!
+
+
+```
+
+> 마지막 PDF는 한번 더 보고 들어가기!!!!!!!!!!!!!!!

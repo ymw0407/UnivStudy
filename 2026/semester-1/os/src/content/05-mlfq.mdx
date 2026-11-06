@@ -1,0 +1,136 @@
+> 모든 가정을 다 제거했을때, 우리는 실행시간을 미래로 예측할 순 없다.
+> 하지만! 과거로부턴 예측해볼 수 있다!!
+
+
+<a id="mlfq" />
+## MLFQ(Multi-Levle Feedback Queue)
+
+- **turnaround time 최적화**
+    - 짧은 작업을 먼저 끝내고 싶다
+- **response time 최소화**
+    - 사용자가 빨리 반응한다고 느끼게 하고 싶다
+
+> **짧고 자주 CPU를 포기하는 작업은 우대**하고,  
+> **길게 CPU를 붙잡는 작업은 뒤로 미루**기
+
+> 기존에는 ready queue가 하나인 것처럼 생각했다면, 
+> 이제는 ready queue가 **우선순위별로 여러 개** 있는 구조
+
+> 각 queue는 서로 다른 priority level을 가짐
+
+**Rule 1**  
+우선순위가 더 높은 queue에 있는 job이 먼저 실행된다.
+
+**Rule 2**  
+같은 queue 안에 있는 job들은 **Round Robin** 으로 실행된다.
+
+- I/O를 기다리면서 반복적으로 CPU를 포기하면(Observed Behavior)
+	- 우선순위를 높게 유지
+- 작업이 오랜 시간 동안 CPU를 집중적으로 사용
+	- 우선순위를 낮춤
+
+-> 
+- 어떤 프로세스가 CPU를 조금만 쓰고 자주 I/O를 하면서 CPU를 빨리 포기한다면  
+    → 짧고 인터랙티브한 job일 가능성이 큼  
+    → 높은 priority를 유지하고 싶다
+- 어떤 프로세스가 타임슬라이스를 끝까지 다 쓰면서 CPU를 오래 점유한다면  
+    → CPU-intensive job일 가능성이 큼  
+    → 낮은 priority queue로 보내고 싶다
+
+
+**Rule 3**
+새로운 job이 시스템에 들어오면, **가장 높은 priority queue** 에 넣는다.
+왜냐하면 처음에는 이 프로세스가 어떤 성격인지 모르기 때문입니다.  
+일단 좋은 대우를 해 주고, 실행해 보면서 판단하겠다는 것입니다.
+
+**Rule 4a**
+어떤 job이 **주어진 time slice를 끝까지 다 써버리면**,  
+즉 CPU를 오래 쓴다면, priority를 낮춰서 더 아래 queue로 내린다.
+
+**Rule 4b**
+반대로 어떤 job이 **time slice를 다 쓰기 전에 CPU를 포기하면**,  
+현재 queue에 그대로 둔다.
+
+- 처음 들어온 job은 일단 최상위 queue에 넣고 실행
+- 실행해 보니 10ms를 다 써버렸다  
+    → 이 친구는 CPU를 오래 쓰는 타입 같으니 아래 queue로 내림
+- 실행해 보니 10ms 안에 CPU를 포기했다  
+    → 이 친구는 인터랙티브하거나 짧은 job 같으니 현재 우선순위를 유지
+
+https://www.youtube.com/watch?v=WOOzgCt6dW4
+
+### 1. Starvation
+
+interactive job이 너무 많으면, 낮은 queue의 job은 CPU를 거의 못 받을 수 있습니다.
+- 작은 작업들이 너무 많으면, CPU만 heavy하게 쓰는 intensive job이 동작을 안함 
+### 2. Gaming the scheduler
+
+프로세스가 스케줄러의 규칙을 악용해 우선순위를 인위적으로 유지할 수 있습니다.
+- ex) 99%만 돌리고, I/O request 돌리고 다시 제일 높은 Priority 가짐.
+### 3. Behavior change
+
+프로세스의 성격이 시간에 따라 바뀔 수 있습니다.  
+처음에는 CPU-bound였다가 나중에는 I/O-bound가 될 수도 있습니다.
+
+
+## Priority Boost
+
+**Rule 5**
+**일정 시간 S마다, 시스템의 모든 job을 최상위 queue로 끌어올린다.**
+
+- A가 아래 queue에서 계속 굶고 있어도
+- 일정 시간이 지나면 강제로 위로 올려준다
+- 그러면 적어도 한 번은 다시 CPU를 받을 기회를 얻는다
+- 이후 다시 오래 CPU를 쓰면 또 아래로 내려가겠지만,
+- 적어도 영원히 굶지는 않는다
+
+> Starvation을 막고,
+> behavior가 바뀐 프로세스에게 다시 기회를 줌 (Behavior change 해결)
+
+
+## Better Accounting
+
+**Rule 4** - 개정
+한 level에서 허용된 총 allotment(할당시간)를 다 쓰면, 중간에 몇 번 CPU를 포기했든 상관없이 priority를 낮춘다.
+
+- 더 이상 "한 번의 time slice를 끝까지 썼는가"만 보지 말고
+- **그 queue에서 누적해서 얼마만큼 CPU를 썼는가**를 본다
+- 누적 allotment를 다 써버리면 강제로 아래 queue로 내린다
+
+<Figure
+  src="/figures/ch05-mlfq-allotment.png"
+  caption="빗금 작업을 보면, a + b의 값을 모두 고려하여 allotment를 초과하면 priority를 낮추는 것을 알 수 있다. (개정된 Rule 4 적용 그림)"
+  source="OSTEP 6_MultiLevelFeedback 강의자료"
+/>
+
+빗금 작업을 보면, a + b의 값을 모두 고려하여 allotment를 초과하면 priority를 낮추는 것을 알 수 있다.
+
+> 이렇게 하면 99%만 쓰고 빠지는 식으로 스케줄러를 속이기가 어려워짐
+
+## 낮은 queue일수록 더 긴 time slice
+
+> 낮은 priority queue일수록 더 긴 quantum을 주자
+
+- ex)
+	- 최상위 queue: 10ms
+	- 중간 queue: 20ms
+	- 최하위 queue: 40ms
+
+- 위에 있는 job들은 대체로 짧고 인터랙티브하므로 짧은 slice로도 충분하다
+- 아래 있는 job들은 대체로 긴 CPU-bound job이므로, 너무 짧게 자르면 오히려 자주 끊겨 비효율적이다
+- 따라서 낮은 queue에서는 한 번 잡았을 때 좀 더 오래 돌게 해 주는 것이 낫다
+
+<Figure
+  src="/figures/ch05-mlfq-timeslices.png"
+  caption="큐 레벨별로 다른 time slice를 적용한 MLFQ 타임라인"
+  source="OSTEP 6_MultiLevelFeedback 강의자료"
+/>
+
+## Solaris MLFQ
+
+Solaris의 time-sharing scheduling class에서는 MLFQ 계열 접근을 썼고,
+
+- queue가 60개 정도 있었고
+- 위쪽 queue는 짧은 time slice
+- 아래쪽 queue는 긴 time slice
+- 대략 1초 정도마다 priority boost가 일어났습니다.

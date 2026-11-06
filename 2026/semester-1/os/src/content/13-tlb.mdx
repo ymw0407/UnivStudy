@@ -1,0 +1,215 @@
+> TLB는 CPU 안의 MMU(Memory Management Unit) 일부에 들어 있는 **작은 하드웨어 캐시**
+
+> 자주 쓰이는 **가상 주소 → 물리 주소 변환 결과**를 저장해 두는 캐시
+
+<Callout kind="note" title="용어 보충: TLB / MMU">
+TLB는 <b>Translation Lookaside Buffer</b>의 약자로, 번역(translation)을 위해 곁눈질(lookaside)로 참고하는 버퍼라는 뜻입니다. MMU(Memory Management Unit)는 CPU 안에서 가상 주소 ↔ 물리 주소 변환을 실제로 수행하는 하드웨어 모듈이며, TLB는 그 MMU 내부의 캐시입니다.
+</Callout>
+
+page table 전체를 매번 메모리에서 찾아보는 대신,
+
+- 최근에 자주 참조한 VPN
+- 그에 대응하는 PFN
+- 그리고 접근 권한 같은 부가 비트
+
+를 칩 안의 빠른 저장 공간에 담아 두고, 다시 같은 페이지를 접근할 때는 page table을 거치지 않고 곧바로 물리 주소를 얻고자 하는 것
+
+```c
+VPN = (VirtualAddress & VPN_MASK) >> SHIFT
+(Success, TlbEntry) = TLB_Lookup(VPN) // TLB 조회
+if (Success) // TLB HIT
+	if (CanAccess(TlbEntry.ProtectBit) == True) // Page Table에서 하던거 똑같이 체크
+	{
+		offest = VirtualAddress & OFFSET_MASK
+		PhysAddr = (TlbEntry.PFN << SHIFT) | offset
+		AccessMemory( PhysAddr ) // physical memory에 첫번째 접근
+	} else RaiseException(PROTECTION_FAULT)
+else // TLB MISS
+{
+	PTEAdrr = PTBR + (VPN * sizeof(PTE))
+	PTE = AccessMemory(PTEaddr); // page table에 접근하여 page table entry 가져옴
+	if (PTE.Valid == False) // 유효성 체크
+	{
+		RaiseException(SEGEMENT_FAULT)
+	}
+	else
+	{
+		TLB_INSERT( VPN, PTE.PFN, PTE.ProtectBits ) // TLB에 PTE 내용 저장
+		RetryInstruction() // 다시 돌려서 TLB Hit을 노림
+	}
+}
+```
+
+
+1. TLB LookUp
+	1. TLB Hit
+		1. protection bit 확인 (valid도 확인하긴 함 원래)
+		2. Physical Address 접근
+	2. TLB Miss
+		1. valid bit 확인
+		2. Page Table Entry 접근
+		3. Page Table의 PFN과 Protection Bit, VPN 정보 등을 담아 TLB Insert
+		4. instruction 재실행
+
+> TLB의 효과를 잘 보여 주는 전형적인 예가 **배열 순차 접근**
+
+```c
+int sum = 0;
+for (int i=0; i<10; i++)
+{
+	sum+=a[i];
+}
+
+//
+          OFFSET
+VPN    00 04 08 12 16
+03        a[0]a[1]a[2]
+04    a[3]a[4]a[5]a[6]
+05    a[7]a[8]a[9]
+
+
+// 이렇게 보면 
+a[0] a[1] a[2]
+a[3] a[4] a[5] a[6]
+a[7] a[8] a[9]
+// 이렇게 각각 한 묶음으로 한 페이지로 만들어지는데
+// 첫 번째 접근에서는 miss가 날 수 있지만, 그 뒤의 접근들은 hit가 많이 날 가능성이 큽니다.
+
+a[0], a[3], a[7] - miss
+a[1], a[2], a[4], a[5], a[6], a[8], a[9] -hit
+
+// 70%는 TLB HIT이 됨
+```
+
+> 공간 지역성(spatial locality)
+
+> 즉, 한 번 어떤 주소를 접근했다면, 곧바로 그 근처 주소를 또 접근할 가능성이 높다는 뜻
+
+## Locality
+
+### Temporal locality
+최근에 접근한 항목은 곧 다시 접근할 가능성이 높다.
+
+### Spatial locality
+어떤 주소 x를 접근했다면, 그 근처 주소도 곧 접근할 가능성이 높다.
+
+> TLB는 페이지 단위 번역을 캐시하므로, 특히 **spatial locality**가 아주 중요
+
+## TLB의 처리 주체 Hardware vs OS
+
+### CISC 계열
+
+대표적으로 x86 계열은 **하드웨어가 TLB miss를 직접 처리**합니다.  
+즉, 하드웨어가 page table을 walk해서 원하는 PTE를 찾고, TLB를 갱신한 뒤 명령을 재시도합니다.
+> 이걸 hardware-managed TLB라고 부릅니다.
+
+### RISC 계열
+
+일부 RISC 구조에서는 TLB miss 시 하드웨어가 직접 page table을 걷지 않고,  
+**예외를 발생시켜 OS의 trap handler가 처리**하게 합니다.  
+즉, miss가 나면 OS가 개입해서 적절한 translation을 넣어 주는 것입니다. 
+> 이를 software-managed TLB라고 부릅니다.
+
+
+```c
+VPN = (VirtualAddress & VPN_MASK) >> SHIFT
+(Success, TlbEntry) = TLB_Lookup(VPN) // TLB 조회
+if (Success) // TLB HIT
+	if (CanAccess(TlbEntry.ProtectBit) == True) // Page Table에서 하던거 똑같이 체크
+	{
+		offest = VirtualAddress & OFFSET_MASK
+		PhysAddr = (TlbEntry.PFN << SHIFT) | offset
+		AccessMemory( PhysAddr ) // physical memory에 첫번째 접근
+	} else RaiseException(PROTECTION_FAULT)
+else // TLB MISS
+{
+	RaiseException(TLB_MISS) // Trap Handler로 TLB MISS -> INSERT -> RETRY
+//	PTEAdrr = PTBR + (VPN * sizeof(PTE))
+//	PTE = AccessMemory(PTEaddr); // page table에 접근하여 page table entry 가져옴
+//	if (PTE.Valid == False) // 유효성 체크
+//	{
+//		RaiseException(SEGEMENT_FAULT)
+//	}
+//	else
+//	{
+//		TLB_INSERT( VPN, PTE.PFN, PTE.ProtectBits ) // TLB에 PTE 내용 저장
+//		RetryInstruction() // 다시 돌려서 TLB Hit을 노림
+//	}
+}
+```
+
+## TLB Entry
+
+TLB entry는 단순히 VPN과 PFN만 저장하는 것이 아님
+
+- VPN
+	- 여기서 VPN을 저장하는 것을 보면 알듯이
+	- TLB Entry는 인덱싱 접근하지 않음
+		- 순서 보장되지 않음
+		- Page Table 처럼 모든걸 저장하지 않기 때문
+- PFN
+- valid bit
+- protection bit
+- dirty bit
+- address-space identifier(ASID)
+- 기타 하드웨어 캐시 관련 비트
+
+> TLB entry는 **작은 page table entry의 캐시판**
+
+TLB는 보통 크기가 아주 크지 않습니다.  
+예를 들어 32개, 64개, 128개 정도의 entry를 갖는 경우가 많습니다.
+
+### Fully Associative 접근
+
+특정 VPN이 들어 있다면 TLB의 어느 슬롯에든 있을 수 있으므로, 하드웨어는 전체 entry를 병렬적으로 비교해서 원하는 VPN을 찾아냄
+
+가능한 이유:
+TLB가 작고, CPU 내부에 있기 때문
+
+> 작은 개수의 entry를 빠르게 병렬 비교하는 구조
+
+## Context Switch in TLB
+
+> TLB는 딱 1개만 존재 
+> CPU안에 1개
+
+-> A의 10인지 B의 10인지 구분할 수 없음
+
+> 그렇기 때문에 TLB Entry에 ASID(Address Space Identifier)를 추가
+
+<Callout kind="note" title="용어 보충: ASID">
+ASID는 <b>Address Space Identifier</b>의 약자입니다. 각 프로세스(정확히는 각 주소 공간)에 부여되는 작은 숫자 태그이며, TLB entry에 이 태그를 함께 넣어 두면 같은 VPN이라도 어느 프로세스의 매핑인지 구분할 수 있습니다. 덕분에 context switch 때마다 TLB 전체를 flush하지 않아도 됩니다.
+</Callout>
+
+- 프로세스 A의 VPN 10 → PFN 100, ASID=1
+- 프로세스 B의 VPN 10 → PFN 170, ASID=2
+
+> context switch가 일어나도 TLB를 무조건 다 비우지 않고, 
+> ASID를 통해 서로 다른 프로세스의 translation을 안전하게 공존
+
+공유 페이지는 어떻게 함?
+-> TLB 상에서는 뭐 
+- (VPN, ASID) → PFN
+로 구분되니깐... 딱히 상관 없음
+
+그냥 같은 PFN이 있는 VPN이 다른게 같이 들어있을 뿐임...
+
+
+## TLB Replacement Policy
+
+TLB 크기는 작기 때문에 새 entry를 넣으려면 오래된 것을 빼야 할 때가 있습니다.  
+이때 어떤 것을 내보낼지 결정하는 정책이 필요합니다.
+
+> 대표적으로 **LRU(Least Recently Used)** 가 자주 소개됨
+
+> 최근에 가장 오래 사용되지 않은 entry를 내보내는 방식
+
+> 이것은 특히나 Temporal locality를 고려한 방식임
+
+최근에 사용된 것은 쓰일 가능성이 높다!!!!
+
+<Figure
+  src="/figures/ch13-tlb-lru.png"
+  caption="TLB hit/miss 비율과 접근 패턴(temporal/spatial locality)에 따른 LRU 교체 예시"
+  source="OSTEP 13_Translation_Lookaside_Buffer 강의자료"
+/>

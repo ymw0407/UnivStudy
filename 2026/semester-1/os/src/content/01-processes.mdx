@@ -1,0 +1,106 @@
+## CPU의 가상화
+OS는 여러 개의 가상 CPU가 존재하는 것처럼 보이도록 할 수 있다.
+- Time Sharing
+	- 잠재적인 비용은 성능 저하
+	- 각 process는 느려짐
+
+## Process
+프로세스는 다음으로 이뤄져있다.
+
+### Memory(address space)
+- Intsructaions (Code Segment/Text Segment, 프로그램 명령어)
+	- 개발자가 작성한 소스코드가 기계어로 저장되는 공간
+	- Read Only 상태로 보호됨
+- Data Segment
+	- global variable이나 static variable이 저장
+	- 초기화된 변수는 Data 영역, 초기화되지 않은 변수는 BSS 영역
+- Heap
+	- 프로그래머가 실행 중에 동적으로 할당하는 메모리 공간 (Dynamical memory Allocation)
+	- 런타임에 크기가 결정, 사용 후 헤제하지 않으면 메모리 주수 발생
+	- 메모리 주소 하단에서 상단으로 확장
+- Stack
+	- 함수의 local variable, argument, return address 등이 임시로 저장된다.
+	- 함수 호출 시 생성되고 종료 시 자동으로 소멸한다.
+	- LIFO 구조
+	- 메모리 상단에서 하단으로 확장
+	- argc, argv, environment variable도 여기 최상단에 생성
+
+> 재귀 호출을 지나치게 깊게 하면? -> 스택이 너무 커지고 -> stack overflow가 발생
+
+> heap space가 너무 비대해짐 -> stack을 침범하면 -> segmentaion fault 발생
+
+<Figure
+  src="/figures/ch01-address-space.png"
+  caption="프로세스 주소 공간의 개념도 (위: 0 주소, 아래로 커널 — Code / Data(+BSS) / Heap ↓ / Stack ↑)"
+  source="OSTEP 2_Processes 강의자료"
+/>
+
+<Callout kind="note" title="용어 보충: BSS">
+BSS는 Block Started by Symbol 의 약자입니다. 초기화되지 않은 전역/정적 변수들이 모이는 영역이며, 실행 파일 안에는 크기 정보만 저장되고 프로세스가 로드될 때 0으로 초기화됩니다. 그래서 실행 파일이 커지지 않으면서 많은 0-초기 변수를 가질 수 있습니다.
+</Callout>
+
+### Registers
+- Program Counter(PC)
+	- 현재 어느 명령어를 실행 중인지
+- Stack Pointer(SP)
+	- 현재 어느 스택의 위치에 있는지
+
+### File Descriptors
+- Process가 사용하는 파일, 소캣, 입출력 장치 등
+
+## Process Creation
+1. OS가 디스크에 있던 실행 파일의 Code와 Static data를 Code Segment와 Data Segement에 각각 load하여 프로세스의 address space에 배치
+	- 프로그램은 처음에 executable format으로 디스크에 저장
+	- 초기에는 데이터를 로딩하는 과정이 eagerly하게 수행
+		- -> 현대에는 데이터를 lazily하게 로딩을 수행
+2. 함수 호출에 필요한 정보를 저장할 run-time stack을 준비한다.
+	- 이때 argc, argv 같은 commandline argument도 들어간다.
+	- argc, argv -> return address -> local varriable -> ...
+3. 동적 할당을 위한 heap을 준비한다.
+4. 기본적인 입출력 설정을 위한, 파일 디스크립터 개방
+	- stdin(0)
+	- stdout(1)
+	- stderr(2)
+5. 프로그램의 시작인 main()부터 실행
+	- OS는 CPU의 제어권을 프로세스에게 넘긴다.
+		- -> Direct Execution
+
+## Process States
+- Running
+	- 현재 CPU를 점유하고 실행 중인 상태
+- Ready
+	- 실행할 준비는 되었으나 CPU를 할당받지 못한 상태
+- Blocked
+	- 어떤 이벤트를 기다리는 상태
+	- 예) I/O 작업을 기다리는 상태
+
+Running하다가 / I/O 요청을 기다리면 Blocked으로 넘어갔다가 / I/O 끝나면 Ready / CPU 할당 받으면,  Running ...
+
+-> 이렇게 CPU를 누구에게 줄지 결정하는 것이 Scheduler
+
+## Data Structures
+Context Switch시 
+- 현재 프로세스의 레지스터를 저장하고
+- 다음 프로세스의 레지스터를 복원해야함
+이때 이러한 정보를 저장하는 대표적인 자료구조가 PCB(Process Control Block)이다.
+
+- 이러한 PCB는 Kernel Space, 즉 DRAM에 저장
+- 각각의 프로세스는 각각의 고유한 PCB를 갖고 있음
+- PCB는 Kernel Space의 Process Specific Data Structures에 포함
+
+<Figure
+  src="/figures/ch01-pcb.png"
+  caption="xv6 의 PCB 구조 — 프로세스별로 state, pid, 레지스터 컨텍스트, 커널 스택 포인터, page table 등을 보관한다."
+  source="OSTEP 2_Processes 강의자료 / xv6 소스"
+/>
+
+**xv6 register context**
+
+- 프로세스를 나중에 다시 실행하기 위해 저장하는 CPU 레지스터 묶음
+- `eip`(PC), `esp`(SP), 일반 레지스터들로 구성
+- `proc` 구조체 안에 저장됨
+- context switch 때 현재 프로세스의 context를 저장하고 다음 프로세스의 context를 복원함
+- 그래서 CPU는 다른 프로세스로 자연스럽게 넘어갈 수 있음
+
+한 줄로 말하면,  
+**register context는 "프로세스의 실행 지점과 CPU 작업 상태를 저장한 스냅샷"**

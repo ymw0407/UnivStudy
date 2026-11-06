@@ -1,0 +1,208 @@
+> **OS가 실행 가능한 프로세스들 중에서 어떤 프로세스를 언제 실행할지 결정하는 것**
+> 즉, CPU를 누구에게 줄지 결정하는 규칙이 필요하고, 그 규칙을 **정책(policy)**이라 함.
+
+## workload Assumptions
+
+문제를 단순화하기 위해 다음과 같은 가정을 둔다.
+
+- 모든 job은 실행 시간이 같다.
+- 모든 job은 동시에 도착한다.
+- 한 번 실행되면 끝날 때까지 계속 실행된다.
+- 모든 job은 CPU만 사용하고 I/O는 하지 않는다.
+- 각 job의 전체 실행 시간을 OS가 미리 알고 있다.
+
+<Callout kind="note" title="읽는 방법">
+이 다섯 가정은 이어지는 절에서 <b>하나씩 제거</b>됩니다. 가정을 깰 때마다 기존 스케줄러의 한계가 드러나고 새 알고리즘이 등장하는 구조이므로, "어떤 가정이 방금 빠졌는가?" 를 주목하면서 읽으면 흐름이 선명해집니다.
+</Callout>
+
+## Scheduling Metrics
+
+### Turnaround time
+
+> **프로세스가 도착한 시점부터 완료될 때까지 걸린 시간**입니다.
+
+- T_turnaround​ = T_completion ​ − T_arrival​
+
+
+### fairness
+
+- 프로세스들이 CPU를 얼마나 공평하게 나눠 가지는가
+- performance와 fairness는 종종 충돌
+	- turnaround와 같은 성능 지표만 볼 것은 아니다.
+
+<a id="fifo" />
+## FIFO(first in, first out)
+
+> FCFS(Fisrt Come, First Serve)라고도 함.
+> 먼저 도착한 job을 먼저 실행하는 방식
+
+예를 들어 A, B, C가 모두 10초씩 실행되고, 순서대로 도착했다고 합시다.
+
+- A: 0초에 도착, 10초에 완료 → turnaround time = 10
+- B: 0초에 도착, 20초에 완료 → turnaround time = 20
+- C: 0초에 도착, 30초에 완료 → turnaround time = 30
+
+### Convoy Effect (모든 job은 실행 시간이 같다. 제거)
+
+- ~~모든 job은 실행 시간이 같다~~
+- 모든 job은 동시에 도착한다.
+- 한 번 실행되면 끝날 때까지 계속 실행된다.
+- 모든 job은 CPU만 사용하고 I/O는 하지 않는다.
+- 각 job의 전체 실행 시간을 OS가 미리 알고 있다.
+
+```
+-> A는 100초짜리 긴 작업이고, B와 C는 각각 10초짜리 짧은 작업인데 A가 먼저 도착
+
+FIFO
+A - - - - - - - - -
+B                         -
+C                          -
+```
+
+
+> 짧은 작업들이 너무 오랫동안 종료가 안됨
+
+turnaround time total = 100(a)+110(b)+120(c) = 330
+avg = 110
+
+<a id="sjf" />
+## SJF(Shortest Job First)
+
+> 가장 짧은 작업을 먼저 실행하는 정책
+> 비선점형(non-preemptive) scheduler
+
+```
+-> A는 100초짜리 긴 작업이고, B와 C는 각각 10초짜리 짧은 작업인데 A가 먼저 도착
+
+SJF
+A     - - - - - - - - -
+B -                       
+C   -             
+```
+
+turnaround time total = 10(b) + 20(c) + a(120) = 150
+avg = 150 / 3 = 50
+
+>SJF는 평균 turnaround time을 줄이는 데 유리
+>짧은 작업을 먼저 끝내버리면 전체 평균 완료 시간이 줄어들기 때문
+
+
+### Late Arrivals from B & C (모든 job은 동시에 도착한다. 제거)
+
+- ~~모든 job은 실행 시간이 같다~~
+- ~~모든 job은 동시에 도착한다.~~
+- 한 번 실행되면 끝날 때까지 계속 실행된다.
+- 모든 job은 CPU만 사용하고 I/O는 하지 않는다.
+- 각 job의 전체 실행 시간을 OS가 미리 알고 있다.
+
+>job이 동시에 도착하지 않는다면 SJF만으로는 부족
+>SJF는 비선점형이기 때문에...
+
+
+<a id="stcf" />
+## STCF(Shortest Time-to-Completion First) (한 번 실행되면 끝날 때까지 계속 실행된다. 제거)
+
+- ~~모든 job은 실행 시간이 같다~~
+- ~~모든 job은 동시에 도착한다.~~
+- ~~한 번 실행되면 끝날 때까지 계속 실행된다.~~
+- 모든 job은 CPU만 사용하고 I/O는 하지 않는다.
+- 각 job의 전체 실행 시간을 OS가 미리 알고 있다.
+
+> SJF에 **선점(preemption)** 을 추가
+
+> 새로운 job이 들어오면, 현재 실행 중인 job과 새로 들어온 job의 **남은 시간**을 비교해서 더 짧은 쪽을 실행
+
+```
+-> A / t=0 / 100s
+   B & C / t=10 / 10s
+   
+STCF
+A -   - - - - - - - - -
+  B - 
+  C  -
+
+```
+
+turnaround time total = 10(b) + 20(c) + a(120) = 150
+avg = 150 / 3 = 50
+
+## 새로운 매트릭: Response Time
+
+> 프로세스가 도착한 시점부터 처음으로 CPU를 할당받기까지 걸린 시간
+
+T_response ​= T_firstrun​−T_arrival
+
+> STCF는 turnaround time 관점에서는 좋을 수 있지만, response time 관점에서는 항상 좋은 것은 아님
+
+<a id="round-robin" />
+## Round Robin
+​
+> RR은 각 프로세스를 **정해진 time slice(quantum)** 만큼만 실행한 뒤, 다음 프로세스로 넘기는 방식
+
+> fairness와 response time 측면에서 유리
+> 프로세스가 짧게라도 빨리 CPU를 한 번씩 받기 때문
+
+> RR is fair, but performs poorly on metrics such as turnaround time
+
+- time slice가 짧을수록
+    - response time은 좋아짐
+    - 하지만 context switch가 자주 일어나서 overhead가 커짐
+- time slice가 길수록
+    - context switch overhead는 줄어듦
+    - 하지만 response time은 나빠짐
+
+**프로세스가 완전히 종료되는 경우**와 **아직 안 끝났는데 다른 프로세스로 바뀌는 경우**를 구분해야 한다
+
+
+## I/O를 포함하자! (모든 job은 CPU만 사용하고 I/O는 하지 않는다. 제거)
+
+- ~~모든 job은 실행 시간이 같다~~
+- ~~모든 job은 동시에 도착한다.~~
+- ~~한 번 실행되면 끝날 때까지 계속 실행된다.~~
+- ~~모든 job은 CPU만 사용하고 I/O는 하지 않는다.~~
+- 각 job의 전체 실행 시간을 OS가 미리 알고 있다.
+
+```
+예를 들어 A와 B가 각각 50ms의 CPU가 필요하다고 합시다.
+
+- A는 10ms 실행한 뒤 I/O를 요청하고 10ms 기다림
+- B는 I/O 없이 CPU만 계속 사용함
+  
+RR
+
+A    - - - - -
+A(io) - - - - 
+B             -----
+
+A - - - - -
+B  - - - - -
+
+
+```
+
+> A가 I/O를 요청하면 A는 **blocked state** 로 들어가고 CPU를 더 이상 쓰지 못합니다.  
+> 그러면 스케줄러는 그 빈 CPU 시간에 B를 실행시켜야 합니다.  
+> 이렇게 해야 CPU를 놀리지 않고 **CPU utilization을 높일 수 있습니다.**
+
+- A가 CPU를 쓰다가 I/O 요청
+- A는 blocked state로 이동
+- OS는 CPU를 B에게 할당
+- I/O가 끝나면 인터럽트 발생
+- 인터럽트 핸들러가 A의 I/O 완료를 확인
+- A를 blocked → ready 상태로 바꾸고 ready list에 넣음
+- 이후 다시 스케줄링 대상이 됨
+
+> I/O 끝나면 Ready Process List에 추가
+
+## No More Oracle(각 job의 전체 실행 시간을 OS가 미리 알고 있다. 제거)
+
+- ~~모든 job은 실행 시간이 같다~~
+- ~~모든 job은 동시에 도착한다.~~
+- ~~한 번 실행되면 끝날 때까지 계속 실행된다.~~
+- ~~모든 job은 CPU만 사용하고 I/O는 하지 않는다.~~
+- ~~각 job의 전체 실행 시간을 OS가 미리 알고 있다.~~
+
+>SJF나 STCF는 "누가 더 짧은가, 누가 남은 시간이 더 적은가"를 알아야 하는데, 이제 그 정보를 모르는 것
+> -> 현실에서는 SJF/STCF를 그대로 구현할 수 없음!!!!
+
+사실? SJF나 STCF가 이론적으로 성능이 가장 좋음! 하지만, 실제로는 남은 시간을 알 수 없기에 이렇게 하지 못함!!

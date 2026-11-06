@@ -1,0 +1,226 @@
+<Callout kind="summary" title="이 장의 목적">
+메모리 가상화 전체(Address Space → Base/Bound → Segmentation → Free-Space → Paging → TLB → Multi-Level)를 &ldquo;어떤 문제 때문에 등장했고 어떤 한계가 다음 개념을 불렀는가&rdquo; 관점에서 9단계로 묶어 정리합니다. 각 단계를 시각적으로 따라가려면 <a href="#/evolution/memory">Memory 변천사 페이지</a> 를 참고하세요.
+</Callout>
+
+## 0. 배경: 프로세스마다 자기만의 메모리가 있는 것처럼 보여야 함
+
+- **문제**
+    - 실제 물리 메모리는 하나인데, 여러 프로세스가 동시에 돌아가려면 각자 **독립된 메모리 공간**을 가진 것처럼 보여야 함
+    - 한 프로세스의 잘못된 접근이 다른 프로세스나 OS를 망가뜨리면 안 됨
+- **필요한 것**
+    - 각 프로세스에 **private address space 환상** 제공
+    - **보호(isolation)** 와 **효율성**을 동시에 만족해야 함
+- **출발점**
+    - 8번 PDF에서 address space, virtual address 개념으로 본격 시작
+
+---
+
+## 1. 초기 관점: "프로세스마다 하나의 연속된 주소 공간"을 주자
+
+- **등장한 생각**
+    - 프로세스는 code, heap, stack 등을 가진 **하나의 address space**를 가진다고 보자
+    - 프로그램이 보는 주소는 전부 **virtual address**이고, OS/하드웨어가 이를 실제 물리 메모리와 연결해 준다
+- **좋았던 점**
+    - 프로그래머 입장에서는 메모리를 단순하게 볼 수 있음
+    - 각 프로세스가 전체 메모리를 혼자 쓰는 것처럼 보임
+- **하지만 아직 남은 문제**
+    - 이 address space를 **실제 물리 메모리 어디에 둘 것인가**
+    - 다른 프로세스 영역을 침범하지 않게 하려면 어떻게 할 것인가
+
+---
+
+## 2. Base-and-Bounds: 연속 주소 공간을 통째로 재배치하자
+
+- **문제**
+    - 프로세스의 주소 공간은 가상적으로 0부터 시작하지만, 실제 물리 메모리에서는 아무 위치에나 놓고 싶음
+    - 또한 자기 주소 공간 밖으로 나가는 접근은 막아야 함
+- **해결**
+    - **base register**: 이 프로세스 주소 공간이 물리 메모리 어디서 시작하는지
+    - **bounds register**: 이 프로세스 주소 공간의 크기/범위가 어디까지인지
+    - 주소 변환:
+        - `physical = virtual + base`
+        - 단, `virtual < bounds` 여야 함
+- **좋았던 점**
+    - 구현이 단순함
+    - 빠름
+    - 보호도 가능함
+- **하지만 새 문제**
+    - 프로세스의 주소 공간 전체를 **하나의 큰 연속 덩어리**로 취급함
+    - 실제로 code/heap/stack 사이 빈 공간까지 포함해서 메모리를 잡아야 하므로 **낭비가 큼**
+    - 주소 공간이 커지면 **연속된 큰 빈 공간**이 필요해서 적재가 어려움
+- **그래서 다음으로**
+    - "전체를 한 덩어리로 보지 말고, 의미 있는 부분별로 나누자" → **Segmentation**
+
+---
+
+## 3. Segmentation: code / heap / stack을 따로 두자
+
+- **Base-and-Bounds의 핵심 문제**
+    - 주소 공간 전체를 한 덩어리로 보면 내부에 비어 있는 부분까지 메모리를 낭비함
+    - 특히 sparse address space에 비효율적
+- **해결**
+    - 주소 공간을 **논리적으로 다른 segment**로 나눔
+        - code
+        - heap
+        - stack
+    - 각 segment마다 **자기만의 base/bounds**를 둠
+    - 그러면 code는 물리 메모리 한쪽, heap은 다른 쪽, stack은 또 다른 쪽에 둘 수 있음
+- **좋았던 점**
+    - sparse address space를 훨씬 잘 지원함
+    - code sharing도 쉬움
+    - translation overhead도 작음
+- **하지만 새 문제**
+    - segment 크기가 **가변 크기(variable-sized)** 임
+    - 물리 메모리에 여기저기 segment를 넣다 보면 **external fragmentation** 발생
+    - 총 free memory는 충분해도, **하나의 큰 연속 공간이 없어서** 할당을 못하는 경우가 생김
+    - compaction으로 해결할 수는 있지만 비쌈
+- **그래서 다음으로**
+    - "가변 크기 덩어리 말고, 아예 고정 크기 단위로 쪼개자" → **Paging**
+
+---
+
+## 4. Free-Space Management: 가변 크기 할당 자체가 어려움
+
+- **Segmentation과 연결된 실무 문제**
+    - 가변 크기 block을 할당/해제하다 보면 memory hole이 생김
+    - split, coalescing, best fit, first fit 등을 해도 단편화 문제가 계속 남음
+- **해결 시도**
+    - free list
+    - splitting / coalescing
+    - best fit / worst fit / first fit / next fit
+    - McKusick-Karels allocator
+    - Buddy system
+- **좋았던 점**
+    - 힙 관리 측면에서 다양한 최적화 가능
+- **하지만 근본 한계**
+    - 결국 여전히 **가변 크기 공간을 잘게 나누고 다시 합치는 문제**를 다루고 있음
+    - external fragmentation을 완전히 제거하지 못함
+- **그래서 다음으로**
+    - "아예 모든 단위를 같은 크기로 맞추자" → **Paging**으로 넘어감
+
+---
+
+## 5. Paging: 가상 공간과 물리 메모리를 고정 크기 단위로 나누자
+
+- **Segmentation / free-space management의 핵심 문제**
+    - 가변 크기 segment 때문에 external fragmentation이 발생
+    - 연속된 공간을 찾는 것이 어렵다
+- **해결**
+    - 가상 주소 공간을 **page**라는 고정 크기 단위로 분할
+    - 물리 메모리도 같은 크기의 **page frame**으로 분할
+    - 각 virtual page가 어떤 physical frame에 들어가는지는 **page table**이 기록
+- **좋았던 점**
+    - 외부 단편화를 크게 줄임
+    - free-space 관리가 단순해짐
+    - heap/stack이 어떻게 자랄지 미리 크게 신경 쓸 필요가 없음
+- **하지만 새 문제**
+    - page table이 커질 수 있음
+    - 메모리 접근할 때마다
+        1. page table entry 읽고
+        2. 실제 데이터 읽고  
+            해야 해서 **너무 느림**
+- **그래서 다음으로**
+    - "자주 쓰는 주소 변환 결과를 캐시하자" → **TLB**
+
+---
+
+## 6. TLB: paging은 좋은데 너무 느리다
+
+- **Paging의 핵심 문제**
+    - 매 메모리 참조마다 page table을 보러 가면 추가 메모리 접근이 필요함
+    - 즉, address translation cost가 너무 큼
+- **해결**
+    - MMU 안에 **TLB(Translation Lookaside Buffer)** 라는 작은 하드웨어 캐시를 둠
+    - 자주 쓰는 VPN → PFN 변환 결과를 저장
+- **좋았던 점**
+    - TLB hit가 나면 page table까지 안 가도 됨
+    - locality를 활용해 translation 속도를 크게 개선
+- **하지만 새 문제**
+    - context switch 시 다른 프로세스의 translation과 섞일 수 있음
+    - 그래서 **ASID** 같은 구분자가 필요
+    - TLB miss 처리 방식도 하드웨어/소프트웨어 설계 차이가 생김
+- **결론**
+    - Paging 자체를 버린 게 아니라, **Paging을 실용적으로 만들기 위해 TLB를 붙인 것**임
+
+---
+
+## 7. Page Table 자체의 문제: 너무 크다
+
+- **문제**
+    - linear page table은 단순하지만 주소 공간이 커지면 너무 큼
+    - 실제로는 address space 전체를 다 쓰지도 않는데, page table은 그 전체를 표현해야 함
+- **해결 방향**
+    - page table을 더 작고 효율적으로 만들려는 방향으로 발전
+- **그 흐름**
+    - 큰 단일 page table → 더 작은 구조 → 계층적 구조
+    - 즉 **multi-level page table**로 발전
+- **이유**
+    - 실제로 사용되는 부분만 table을 두고 싶기 때문
+    - sparse address space에 더 잘 맞추기 위해서
+- **그래서 다음으로**
+    - **Multi-Level Paging / Smaller Tables**
+
+---
+
+## 8. Multi-Level Page Table: page table도 필요한 부분만 만들자
+
+- **기존 문제**
+    - linear page table이 너무 큼
+    - 안 쓰는 주소 영역에 대해서도 PTE 공간을 낭비
+- **해결**
+    - page table을 여러 단계로 나눔
+    - 상위 단계가 "이 하위 page table이 존재하는가"를 가리키게 함
+    - 실제로 쓰는 virtual address 범위에 대해서만 하위 table을 만듦
+- **좋았던 점**
+    - 메모리 절약
+    - sparse address space에 적합
+- **대가**
+    - page walk가 더 복잡해짐
+    - TLB miss 시 여러 단계 table을 따라가야 하므로 비용 증가
+- **그래도 유지되는 이유**
+    - table 공간 절약 효과가 매우 큼
+    - 현대 시스템에서 paging을 현실적으로 운영하는 핵심 방식
+
+---
+
+## 9. 최종 큰 흐름 한 줄 요약
+
+- **연속 주소 공간 하나 통째로 배치**
+    - 단순하지만 낭비 큼 → **Base-and-Bounds**
+- **논리 단위별로 따로 배치**
+    - sparse space엔 좋지만 가변 크기라 외부 단편화 → **Segmentation**
+- **가변 크기 관리 최적화 시도**
+    - free list, coalescing, buddy 등 → 그래도 근본 해결 아님
+- **고정 크기 page/frame으로 통일**
+    - 외부 단편화 완화 → **Paging**
+- **paging이 느림**
+    - translation cache 추가 → **TLB**
+- **page table이 큼**
+    - 필요한 만큼만 만들자 → **Multi-Level Page Table**
+
+---
+
+## 시험용 초압축 버전
+
+- **Base-and-Bounds**
+    - 문제: 주소 공간 전체를 한 덩어리로 잡아야 해서 낭비 큼
+    - 해결: base/bounds로 relocation + protection
+    - 한계: sparse address space 비효율
+- **Segmentation**
+    - 문제: 전체를 한 덩어리로 보는 것이 비효율
+    - 해결: code/heap/stack을 따로 배치
+    - 한계: variable-sized allocation이라 external fragmentation
+- **Free-Space Management**
+    - 문제: 가변 크기 free space 관리가 어렵고 hole 발생
+    - 해결: split/coalesce, fit 전략, buddy 등
+    - 한계: 단편화 근본 해결 못 함
+- **Paging**
+    - 문제: 연속 공간 필요 / external fragmentation
+    - 해결: page/frame의 고정 크기 분할 + page table
+    - 한계: 주소 변환이 느림, page table이 큼
+- **TLB**
+    - 문제: paging의 translation overhead
+    - 해결: 자주 쓰는 변환 결과 캐시
+- **Multi-Level Page Table**
+    - 문제: linear page table 메모리 낭비
+    - 해결: 필요한 부분만 page table 생성

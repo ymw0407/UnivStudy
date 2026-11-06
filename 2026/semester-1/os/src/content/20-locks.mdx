@@ -1,0 +1,745 @@
+<Callout kind="summary" title="이 장의 목적">
+앞 장에서 mutex API 를 썼다면, 이번 장은 그 안에서 **lock 이 어떻게 구현되는가** 를 다룹니다. interrupt 끄기부터 spin lock, Test-And-Set / CAS / LL-SC, Ticket Lock, 그리고 spin 을 없애기 위한 OS support(yield · park/unpark · futex), 마지막으로 Two-Phase Lock 까지 — *"hardware 와 OS 가 어떤 도구를 줘야 lock 이 가능해지는가"* 를 한 줄기로 본다.
+</Callout>
+
+> Lock의 기본 아이디어는 **critical section이 하나의 atomic instruction처럼 실행되도록 보장하는 것**
+
+```c
+balance = balance + 1
+```
+
+```mips
+lw    $t0, balance     # load:  메모리의 balance → 레지스터 $t0
+addi  $t0, $t0, 1      # add:   $t0 = $t0 + 1
+sw    $t0, balance     # store: $t0 → 메모리의 balance
+```
+
+`balance = balance + 1`은 한 줄처럼 보이지만 실제로는 load, add, store 같은 여러 단계로 나뉜다. 
+
+여러 thread가 동시에 이 코드를 실행하면 중간에 끼어들 수 있으므로 결과가 꼬일 수 있다.
+
+-> critical section이다
+
+```c
+lock_t mutex;
+lock(&mutex);
+balance = balance + 1;
+unlock(&mutex);
+```
+
+> 이 영역은 한 번에 하나의 thread만 들어오게 하겠다
+
+### Lock state
+
+**available / unlocked / free** 상태 
+
+> 아무 thread도 lock을 잡고 있지 않은 상태이므로, 누군가 들어와서 lock을 획득할 수 있다.
+
+**acquired / locked / held** 상태  
+
+> 이미 어떤 thread가 lock을 잡고 critical section에 들어간 상태다. 
+> 이때 다른 thread들은 lock을 얻을 수 없고 기다려야 한다.
+
+`lock()` 
+> "lock을 획득하려고 시도한다"
+
+만약 아무 thread도 lock을 잡고 있지 않으면, 호출한 thread가 lock을 획득하고 critical section으로 들어감 
+> 이 thread를 lock의 **owner**라고 부른다.
+> 핵심은 owner가 critical section을 수행하는 동안 다른 thread가 같은 critical section에 진입하지 못하게 막는 것이다.
+
+### Pthread Locks - mutex
+
+> POSIX thread 라이브러리에서는 lock을 **mutex**라고 부른다
+> mutex는 mutual exclusion, 즉 상호 배제를 제공하기 위한 lock
+
+```c
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;  
+  
+Pthread_mutex_lock(&lock);  
+balance = balance + 1;  
+Pthread_mutex_unlock(&lock);
+```
+
+모든 공유 변수에 하나의 거대한 lock만 걸 필요는 없음
+
+-> 공유 변수 개별마다 lock을 걸어도 충분함 -> concurrency 증가
+
+> fine-grained locking
+
+### lock 평가
+
+첫째, **Mutual Exclusion**이다.  -> 기본(상호배제)
+
+정말로 critical section에 한 번에 하나의 thread만 들어가게 막는가?
+
+둘째, **Fairness**이다.  -> 공평성
+
+- lock을 기다리는 thread들이 공평하게 lock을 얻을 기회를 가지는가? 
+- 특정 thread가 계속 lock을 얻지 못하고 starvation에 빠지면 fairness가 나쁘다.
+
+셋째, **Performance**이다.  -> 비용
+
+- lock을 잡고 푸는 과정에서 발생하는 시간 오버헤드가 작은가?
+- lock이 정확하더라도 CPU를 너무 낭비하면 좋은 구현이라고 보기 어렵다.
+
+<Callout kind="tip" title="이번 장에서 lock 구현을 볼 때마다 던질 3 가지 질문">
+1. <b>Correctness</b> — mutual exclusion 이 정말 깨지지 않는가?<br/>
+2. <b>Fairness</b> — 오래 기다린 thread 가 결국 기회를 얻는가? (starvation 없는가?)<br/>
+3. <b>Performance</b> — single-CPU / multi-CPU 각각에서 비용은 얼마인가?
+</Callout>
+
+
+### Controlling Interrupts
+
+single-processor system을 위해 고안됨
+
+```c
+void lock() {
+    DisableInterrupts(); 
+    // interrupt가 일어나지 않게 -> context switching이 일어나지 않음
+    // -> 현재 thread가 critical section을 끝낼 때까지 계속 실행될 수 있다.
+}
+void unlock() {
+    EnableInterrupts();
+}
+```
+
+1. application을 너무 신뢰해야 한다. 
+	- 만약 어떤 프로그램이 interrupt를 끈 뒤 다시 켜지 않으면 CPU를 독점할 수 있다. 
+2. 또한 multiprocessor에서는 CPU마다 interrupt가 따로 있기 때문에 한 CPU의 interrupt를 꺼도 다른 CPU에서 동시에 접근할 수 있다. 
+	- 각 코어마다 interrupt를 따로 가짐
+3. 긴 시간 interrupt를 꺼두면 중요한 interrupt를 놓칠 수도 있다.
+	- interrupt에는 timer interrupt만 있는게 아니기 때문
+
+---
+
+### hardware support가 필요한 이유
+
+```c
+typedef struct __lock_t {
+	int flag;
+	// 0 이면 available
+	// 1 이면 locked
+} lock_t;
+void init(lock_t *mutex) {
+	mutex->flag = 0; // mutex의 flag를 0으로 초기화
+}
+// problem -> no atomicity! 
+// -> while에서 풀려서 나오는 순간 컨텍스트 스위칭이 일어나면?
+// 다른 쓰레드도 락을 획득하고 해당 쓰레드도 락을 획득하는 상태가 일어난다.
+// 원자성 문제가 발생 
+void lock(lock_t *mutex) {
+	while(mutex->flag == 1) // mutex의 flag가 1이면 -> lock이 걸려있으면 wait
+		continue; // spin-wait // do nothing
+	
+	// lock이 풀리면
+	mutex->flag = 1; // 내가 lock을 잡고 flag를 1로 표기
+}
+void unlock(lock_t *mutex) {
+	mutex->flag = 0; // lock을 풀기
+}
+```
+
+#### Problem 1 
+
+| Thread 1                                                              | Thread2                                                               |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| flag = 0                                                              |                                                                       |
+| call lock()                                                           |                                                                       |
+| while (flag == 1)<br/>// flag는 0이니까 바로 넘어감                             |                                                                       |
+| interrupt: switch to Thread2<br/>// timer interrupt로 context switching |                                                                       |
+|                                                                       | call lock()                                                           |
+|                                                                       | while (flag == 1)<br/>// flag는 0이니까 바로 넘어감                             |
+|                                                                       | interrupt: switch to Thread1<br/>// timer interrupt로 context switching |
+| flag = 1<br/>// lock 획득                                                |                                                                       |
+| ...<br/>// 진행                                                          |                                                                       |
+| interrupt: switch to Thread2<br/>// timer interrupt로 context switching |                                                                       |
+|                                                                       | flag = 1<br/>// lock 획득<br/>// 아직 Thread 1이 unlock을 하지 않았는데도, lock을 획득함 |
+|                                                                       |                                                                       |
+
+결과적으로 두 thread가 동시에 critical section에 들어가므로 mutual exclusion이 깨진다.
+
+<AtomicityRaceTimeline caption="naive flag spinlock 의 race — 'flag 검사 → flag set' 사이에 context switch 가 끼어들면 두 thread 가 모두 0 을 보고 통과한 뒤 둘 다 flag = 1 로 만든다. 결국 둘 다 critical section 안. 'test 와 set 사이' 가 핵심 취약점." />
+
+> 그래서 hardware가 제공하는 **atomic instruction**이 필요하다.
+
+#### Problem 2
+
+Sping-waiting이 일어남
+
+-> while문을 계속 돌면서 대기하는데 사실 이 시간은 다른 thread들도 돌릴 수 있는 시간임
+
+### Test And Set (Atomic Exchange)
+
+```c
+int TestAndSet(int *ptr, int new) {
+	// lock 구현에 사용되는 대표적인 atomic instruction
+	int old = *ptr;  
+	*ptr = new;  
+	return old;  
+}
+```
+
+> "기존 값을 읽고, 동시에 새 값으로 바꾸며, 기존 값을 반환한다"
+> 이 과정이 **atomic하게 수행된다** -> 중간에 다른 CPU나 thread가 끼어들 수 없다
+
+```c
+%eax = 1 // new 값을 미리 넣어둠
+%ebx = &lock->flag // lock -> flag의 주소를 미리 넣어둠
+xchg %eax, (%ebx)
+// atomic exchange
+// %eax: eax 안에 들어 있는 실제 값
+// (%ebx): ebx에 들어있는 값을 "주소"로 하는 메모리 위치
+// 자동으로 memory bus lock이 걸림
+// %eax:  
+// 처음에는 lock->flag에 넣을 새 값 1  
+// xchg 이후에는 lock->flag의 이전 값이 들어옴  
+  
+// (%ebx):  
+// ebx에 들어 있는 값을 주소로 해석한 메모리 위치  
+// 즉 lock->flag 자체
+```
+
+> xchg 후 `%eax == 0` 
+> 	→ 이전에 lock이 비어 있었음 
+> 	→ lock 획득 성공  
+> xchg 후 `%eax == 1` 
+> 	→ 이전에 lock이 이미 잡혀 있었음 
+> 	→ lock 획득 실패
+
+결론적으로 ebx가 주소(lock->flag)라서 set을 하는 동시에 평가(test)가 가능하다
+
+<TestAndSetMechanic caption="xchg 는 %eax 와 메모리 한 워드를 atomic 하게 맞바꾼다. 그래서 'flag 의 옛값을 가져오기' 와 'flag 를 1 로 만들기' 가 한 instruction 안에 묶인다. 옛값이 0 이면 내가 처음 잡은 것 → lock 획득, 1 이면 누군가 이미 잡고 있던 것 → 실패." />
+
+```c
+typedef struct __lock_t {
+	int flag;
+} lock_t;
+void init(lock_t *lock) {
+	// 0 -> lock 가능
+	// 1 -> lock이 걸려있음
+}
+void lock(lock_t *lock) {
+	// flag가 평가 시점에 0이였으면 0을 반환
+	// flag가 평가 시점에 1이였으면 1을 반환
+	// 하지만 flag는 1이 대입이 됨.
+	// return값이 0이면? 0인걸 판단한 순간에 1을 대입하였기 때문에
+	// atomic하게 락을 받았다고 할 수 있음
+	// -> 0이 나와야 lock을 획득한 것
+    while (TestAndSet(&lock->flag, 1) == 1)
+        ; // spin-wait
+}
+void unlock(lock_t *lock) {
+    lock->flag = 0;
+}
+```
+
+> `flag`의 기존 값을 읽는 것(test)과, 그 자리에 `1`을 쓰는 것(set)이 하나의 원자적 동작으로 묶이는 것
+> test와 set 사이에 context switch가 끼어들 수 없게 하므로 mutual exclusion을 보장한다
+
+single processor에서 정확하게 동작하려면, preemptive(선점형) 스케쥴러가 필요하다
+
+// spin-wait 중인 thread가 CPU를 계속 잡고 있으면 lock을 풀 thread가 실행될 수 없음
+
+### Evaluating Spin Locks
+
+Correctness -> yes
+
+- atomic instruction을 사용
+	- 한 번에 하나의 thread만 critical section에 들어갈 수 있음
+
+Fairness -> no
+
+- 오래 기다린 thread가 다음에 반드시 lock을 얻는다는 보장이 없음
+- 운이 나쁘면 특정 thread는 계속 spin만 하다가 starvation에 빠질 수 있다.
+
+Performance
+
+- single CPU 환경에서는 어떤 thread가 lock을 기다리며 계속 spin하고 있으면 CPU 시간을 낭비
+	- 특히 lock을 가진 thread가 실행되어야 lock이 풀리는데, 기다리는 thread가 CPU를 잡고 spin하면 비효율이 큼
+- 다만 multicore 환경에서 lock이 곧 풀릴 상황이라면 spin lock이 나쁘지 않을 수도 있다. 
+	- context switch 없이 바로 lock을 얻을 수 있기 때문이다.
+	- CPU를 더 잡는 대신, Context Switching overhead를 없앨 수 있음
+
+### Compare And Swap (SPARC, Scalable Processor ARChitecture)
+
+```c
+int CompareAndSwap(int *ptr, int expected, int new) {
+    int actual = *ptr;
+    if (actual == expected)
+        *ptr = new;
+    return actual;
+}
+```
+
+```c
+void lock(lock_t *lock) {
+	while (CompareAndSwap(&lock->flag, 0, 1) == 1)  
+		; // spin
+}
+```
+
+TAS와 CAS는 둘 다 atomic read-modify-write 명령어다.  
+  
+TAS는 기존 값을 읽고, 무조건 새 값을 저장한 뒤, 기존 값을 반환한다.  
+
+> 따라서 단순 spinlock 구현에 사용할 수 있다.  
+  
+CAS는 기존 값을 읽고, 그 값이 expected와 같을 때만 새 값으로 변경한다.  
+
+> 따라서 단순 lock뿐 아니라, 여러 상태를 구분해야 하는 복잡한 동기화 구조나 lock-free 자료구조 구현에 더 적합하다. 
+
+예를 들어 값이 단순히 0/1이 아니라 이런 식이면?
+
+```
+0 = unlocked
+1 = locked
+2 = sleeping
+3 = destroyed
+```
+
+-> 무조건 1을 넣으면 되는 구조가 아님
+
+> state가 정확히 0일 때만 1로 바꿔라.  
+> 다른 상태면 건드리지 마라.
+
+단순 0/1 lock에서는 둘의 동작 결과가 비슷하지만,  
+TAS는 실패해도 값을 다시 쓰는 반면,  
+CAS는 기대한 값이 아니면 논리적으로 값을 변경하지 않는다는 차이가 있다.
+
+<CasVsTas caption="단순 bool lock 에서는 둘이 비슷해 보이지만, 다중 상태나 lock-free 자료구조에서는 'expected 와 같을 때만 쓴다' 는 CAS 의 조건부 의미가 결정적이다. TAS 는 항상 새 값을 덮어쓰므로 단순 toggle 에만 안전." />
+
+### Compare And Exchange (x86)
+
+x86에서는 compare-and-swap 계열의 명령으로 `cmpxchg`를 사용한다.
+
+이 명령은 메모리 값을 읽고, 비교하고, 조건이 맞으면 쓰는 과정을 수행한다. 
+multi-CPU 환경에서는 read와 write 사이에 다른 CPU가 끼어들면 안 되므로, `lock` prefix 같은 hardware 지원을 통해 atomic성을 보장한다.
+
+핵심은 단순한 C 코드처럼 보여도 실제 CPU에서는 `memory bus`나 `cache coherence protocol` 수준의 지원이 필요하다는 점이다.
+
+> hardware의 support가 필요하다
+
+### Load-Linked and Store-Conditional
+
+```c
+int LoadLinked(int *ptr) {
+	// 주소의 값을 읽는다.  
+	return *ptr;
+}
+int StoreConditional(int *ptr, int value) {
+	if (no__one__has__updated__*ptr__since__the__LoadLinked__to__this__address) {
+		// 같은 주소가 다른 누군가에 의해 수정되지 않았을 때만 쓰기에 성공
+		*ptr = value;
+		return 1; // success
+	} else {
+		return 0; // failed to update
+	}
+}
+```
+
+```c
+void lock(lock_t *lock) {
+	while(1) { // spin lock은 아직 해결 못함
+		while (LoadLinked(&lock->flag == 1))
+			;// 0이 될때까지 스핀
+		if (StoreConditional(&lock->flag, 1) == 1)
+			return; 
+			// 만약 그 주소가 다른 누군가에 의해서 수정이 되지 않고, 나만 들어왔다면 쓰기에 성공
+			// 아니면, 다시 처음부터
+	}
+}
+void unlock(lock_t *lock) {
+	lock -> flag = 0;
+}
+```
+
+MIPS 같은 RISC 계열에서는 Load-Linked / Store-Conditional, 줄여서 **LL/SC** 방식도 사용한다.
+
+`LoadLinked`는 주소의 값을 읽는다.  
+`StoreConditional`은 그 이후 같은 주소가 다른 누군가에 의해 수정되지 않았을 때만 쓰기에 성공한다.
+
+> 즉, read와 write 사이에 다른 write가 있었는지 감시하는 방식이다.
+
+이 방식은 read-modify-write를 하나의 복잡한 명령으로 만들기보다, 읽고 쓰는 사이의 변경 여부를 hardware가 추적하는 방식이라고 보면 된다.
+
+<Callout kind="note" title="LL/SC 가 CAS 와 다른 점">
+CAS 가 <i>"값을 비교하고 같으면 쓰기"</i> 를 한 명령으로 묶었다면, LL/SC 는 <i>"읽은 시점부터 쓰는 시점까지 그 주소가 건드려진 적 있나?"</i> 를 hardware 가 watch list 로 추적합니다. RISC 철학(작은 명령들을 조합)에 맞춰 read-modify-write 를 두 개의 단순한 명령으로 쪼갠 셈입니다.
+</Callout>
+
+### Fetch-And-Add -> Fairness 해결하기 위함
+
+```c
+int FetchAndAdd(int *ptr) {
+    int old = *ptr;
+    *ptr = old + 1; // lock xaddl %eax, (%ebx)
+    return old;
+}
+```
+
+> 특정 주소의 값을 atomic하게 1 증가시키면서, 증가 전의 old 값을 반환
+> 여러 thread가 동시에 호출해도 각각 서로 다른 old 값을 받는다. 
+> 이 성질을 이용하면 thread들에게 번호표를 나눠줄 수 있다.
+
+### Ticket Lock
+
+```c
+typedef struct __lock_t {  
+	int ticket; // 새로 들어온 thread에게 나눠줄 번호표
+	int turn; // 현재 critical section에 들어갈 차례의 번호
+} lock_t;
+void lock_init(lock_t *lock) {
+	lock->ticket = 0;
+	lock->turn = 0;
+}
+void lock(lock_t *lock) {
+	int myturn = FetchAndAdd(&lock->ticket); // 각자의 atomic 번호를 순서대로 받음
+	while (lock->turn != myturn) // unlock에서 나를 지정할때까지 spin
+		; // spin
+}
+void unlock(lock_t *lock) {
+	FetchAndAdd(&lock->turn); // 다음 번호 들어가고
+}
+```
+
+> ticket lock은 기다린 순서대로 lock을 얻게 하므로 fairness를 개선한다. 
+> 다만 여전히 while문에서 spin한다는 점은 남아 있다.
+
+<TicketLockFlow caption="FAA(&ticket) 으로 도착 순서대로 번호표를 발급받고, turn 이 자기 번호와 같을 때까지 spin. unlock 은 FAA(&turn) 으로 다음 번호를 호명한다. → 'starvation 없이 도착 순' 보장." />
+
+## Spin Lock을 없애보자!
+
+> lock을 기다리는 동안 계속 CPU를 쓰지 말고, 아예 thread를 blocked state로 보내서 재우자는 방향으로 
+> 이를 위해서는 hardware뿐만 아니라 **OS support**가 필요하다.
+
+### A Simple Approach: Just Yield
+
+```c
+while (TestAndSet(&flag, 1) == 1)  
+	yield();
+```
+
+> `yield()`는 현재 thread가 CPU 사용을 양보하고 ready state로 돌아가게 하는 system call이다. 
+> 즉, 계속 while문을 돌며 CPU를 태우는 대신 다른 thread에게 CPU를 넘긴다.
+
+첫째, context switch 비용이 크다. 
+
+lock을 얻지 못할 때마다 yield하면 계속 context switch가 발생할 수 있다.
+
+둘째, starvation 문제는 여전히 남는다. 
+
+어떤 thread가 다음에 lock을 얻을지는 scheduler가 결정하므로, 기다린 순서대로 lock을 얻는다는 보장이 없다.
+
+-> **운 좋게 먼저 실행된 thread**가 lock을 얻는다
+
+> `yield()`는 CPU 낭비는 줄여주지만, **lock 획득 순서를 관리하지 않는다.**
+
+### Using Queues: Sleeping Instead of Spinning
+
+```c
+typedef struct __lock_t {
+	int flag;
+	int guard;
+	queue_t *q;
+} lock_t;
+void lock_init(lock_t *m) {
+	m->flag = 0;
+	m->guard = 0;
+	queue_init(m->q);
+}
+void lock(lock_t *m) {
+	while (TestAndSet(&m->guard, 1) == 1)
+		; // guard lock을 spinning을 통해서 얻음
+	if (m->flag == 0) {
+		m->flag = 1; // lock 획득
+		m->guard = 0; // guard lock은 놓아줌
+	} else {
+		queue_add(m->q, gettid()); // queue에 tid를 넣음
+		m->guard=0; // guard lock은 놓아줌
+		park(); // sleep
+	}
+}
+void unlock(lock_t *m) {
+	while (TestAndSet(&m->guard, 1) == 1)
+		; // acquire guard lock by spinning
+	if (queue_empty(m->q))
+		// 기다리는 thread가 없다
+		m->flag = 0;
+		// lock만 풀고 끝
+	else
+		unpark(queue_remove(m->q));
+		// queue에 들어가있던 하나를 꺼내서 제거하고 깨우기
+	m->guard = 0;
+}
+```
+
+guard lock은 실제 critical section을 보호하는 lock이 아니라,  
+lock 구현 내부의 공유 상태인 flag와 queue를 보호하기 위한 내부 spinlock이다.  
+  
+즉, 여러 thread가 동시에 lock() 또는 unlock()을 호출하더라도  
+m->flag 확인 및 변경, queue_add, queue_empty, queue_remove 같은 작업이  
+서로 섞이지 않도록 atomic하게 만들어준다.
+
+```
+guard가 보호하는 것:
+- flag 확인 및 변경
+- queue_add
+- queue_empty
+- queue_remove
+```
+
+기존 TAS(Test And Set) spinlock:  
+- 상태가 flag 하나뿐이다.  
+- TestAndSet이 flag 조작을 atomic하게 해준다.  
+- thread가 잠들지 않고 계속 확인하므로 lost wakeup 문제가 없다.  
+  
+queue + park 방식:  
+- flag뿐 아니라 waiting queue도 관리해야 한다.  
+- flag 확인, queue 추가, queue 제거, wakeup이 서로 섞이면 안 된다.  
+- 그래서 lock 내부 상태를 보호하는 guard가 필요하다.  
+- 또한 thread가 잠들기 때문에 lost wakeup 문제가 새로 생긴다.
+
+> guard는 spinlock을 없애면서 queue와 sleep을 도입했기 때문에 필요해진 내부 보호 장치다. 
+> 기존 TAS spinlock은 flag 하나만 atomic하게 바꾸면 됐지만, park/unpark 방식은 flag와 queue를 함께 안전하게 관리해야 하므로 guard가 필요하다.
+
+| time | OS                            | T1                                              | T2(얘가 lock잡고 있었음)                              |
+| ---- | ----------------------------- | ----------------------------------------------- | ---------------------------------------------- |
+| t1   |                               | TAS (Guard) -> 0 -> 1,  통과<br/>guard lock 잡고, 통과 |                                                |
+| t2   |                               | flag == 1, else 진입<br/>누군가 lock을 잡고 있음, lock 실패  |                                                |
+| t3   |                               | queue_add(q, T1)<br/>나를 깨울 목록에 추가                |                                                |
+| t4   |                               | m->guard = 0<br/>guard lock 해제                   |                                                |
+| t5   | context switching<br/>T1 -> T2 |                                                 |                                                |
+| t6   |                               |                                                 | TAS (Guard) -> 0 -> 1, 통과<br/>guard lock 잡고, 통과 |
+| t7   |                               |                                                 | queue_empty? no<br/>T1이 들어가있음!                  |
+| t8   |                               |                                                 | unpark(T1)<br/>T1을 깨움                           |
+| t9   |                               |                                                 | m -> guard = 0<br/>guard lock 해제                |
+| t10  |                               | Park()<br/>Sleep을 이제서야 들어감<br/>-> sleep forever   |                                                |
+
+<LostWakeupRace caption="t4 에서 guard 만 풀고 아직 park() 를 호출하기 직전에 context switch 가 일어났다. T2 는 queue 에서 T1 을 꺼내 unpark 를 쐈지만, T1 은 그 신호를 받기 전이라 그냥 흘러가 버린다. t10 에서야 T1 이 park() 하면 신호는 이미 지나간 뒤 — 영영 깨어나지 못한다 (lost wakeup)." />
+
+### Wakeup/waiting race 해결: setpark() (Solaris OS)
+
+> Solaris OS는 이 문제를 해결하기 위해 `setpark()`라는 system call을 추가했다.
+> thread가 실제로 `park()`를 호출하기 전에, "나 이제 곧 잘 것이다"라고 OS에게 미리 표시
+
+```c
+queue_add(m->q, gettid());  
+setpark();  
+m->guard = 0;  
+park();
+```
+
+> `setpark()` 이후 `park()` 전에 누군가 `unpark()`를 호출하면, 이후의 `park()`는 실제로 잠들지 않고 즉시 반환한다.
+
+<Callout kind="tip" title="setpark 가 race 를 끊는 방식">
+포인트는 <i>"잠들 의향을 먼저 등록한다"</i> 입니다. setpark 이후의 park 는 자기가 호출되기 <b>전에 들어온 unpark</b> 까지 기억합니다. 그래서 위 t1~t10 시나리오에서 t4 직전에 setpark 만 끼워 두면, t8 의 unpark 가 흘러가 버리지 않고 t10 의 park 가 즉시 반환되어 정상 동작합니다.
+</Callout>
+
+### Futex, Fast Userspace Mutex (linux)
+
+Linux에서는 Solaris의 park/unpark와 비슷한 역할을 하는 **futex**를 제공한다.
+
+```c
+futex_wait(address, expected)
+// 해당 주소의 값이 expected와 같으면 thread를 잠들게 한다. 
+// 만약 값이 expected와 다르면 즉시 반환한다.
+futex_wake(address)
+// 해당 주소에서 기다리는 thread 중 하나를 깨운다.
+```
+
+> futex는 user-level lock 구현과 kernel-level sleep/wakeup을 연결하는 장치
+> 경합이 없으면 user space에서 atomic instruction만으로 처리한다.
+> 경합이 있으면 kernel에 들어가서 thread를 sleep시킨다.
+
+<FutexFastSlowPath caption="경합이 없는 흔한 경우는 userspace 의 atomic 명령 한 번으로 끝 (fast path). 경합이 일어나야만 syscall 로 kernel 에 진입해 sleep/wake 인프라를 쓴다 (slow path). pthread mutex 가 빠른 이유의 절반은 여기에 있다." />
+
+```c
+void mutex_lock(int *mutex) {
+	int v;
+	if (atomic_bit_test_set(mutex, 31) == 0)
+		return; // lock 획득
+	atomic_increment(mutex);
+	while(1) {
+		if (atomic_bit_test_set(mutex, 31) == 0) {
+			atomic_decrement(mutex);
+			return; // lock 휙득
+		}
+		v = *mutex;
+		if (v >= 0)
+			continue; // unlock 상태일 수 있다.
+		futex_wait(mutex, v);
+	}
+}
+void mutex_unlock(int *mutex) {
+	if (atomic_add_zero(mutex, 0x80000000))
+		return;
+	futex_wake(mutex);
+}
+```
+
+```c
+/*
+ * mutex 하나를 int 하나로 표현한다.
+ *
+ * bit 31, 즉 최상위 bit:
+ *   0이면 lock이 비어 있음
+ *   1이면 lock이 잡혀 있음
+ *
+ * 나머지 하위 bit들:
+ *   대기 중인 thread 수를 나타내는 용도로 사용
+ *
+ * 따라서 mutex 값이 음수이면:
+ *   최상위 bit가 1이라는 뜻
+ *   즉 lock이 잡혀 있는 상태
+ */
+void mutex_lock(int *mutex) {
+    int v;
+    /*
+     * atomic_bit_test_set(mutex, 31)
+     *
+     * mutex의 31번 bit를 읽고,
+     * 그 bit를 1로 set한다.
+     *
+     * return 값은 "set하기 전 31번 bit의 값"이다.
+     *
+     * 기존 31번 bit가 0이었다면:
+     *   lock이 비어 있었다는 뜻
+     *   그리고 지금 31번 bit를 1로 바꿨으므로 lock 획득 성공
+     */
+    if (atomic_bit_test_set(mutex, 31) == 0)
+        return; // fast path: 경쟁 없이 lock 획득
+    /*
+     * 여기까지 왔다는 것은 기존 31번 bit가 이미 1이었다는 뜻이다.
+     * 즉, lock이 이미 잡혀 있었다.
+     *
+     * 이제 이 thread는 기다려야 하므로
+     * mutex의 waiter count를 1 증가시킨다.
+     */
+    atomic_increment(mutex);
+    while (1) {
+        /*
+         * 다시 한 번 lock 획득을 시도한다.
+         *
+         * 기다리는 동안 lock이 풀렸을 수도 있으므로,
+         * 바로 잠들기 전에 atomic하게 31번 bit를 set해본다.
+         *
+         * 기존 31번 bit가 0이면:
+         *   lock이 풀려 있었던 것
+         *   지금 내가 31번 bit를 1로 바꿨으므로 lock 획득 성공
+         */
+        if (atomic_bit_test_set(mutex, 31) == 0) {
+            /*
+             * 이제 더 이상 기다리는 thread가 아니므로
+             * waiter count를 1 감소시킨다.
+             */
+            atomic_decrement(mutex);
+            return; // lock 획득
+        }
+        /*
+         * 여기까지 왔다는 것은 lock이 아직 잡혀 있었다는 뜻이다.
+         * 현재 mutex 값을 읽어온다.
+         */
+        v = *mutex;
+        /*
+         * v >= 0 이라는 것은 최상위 bit가 0이라는 뜻이다.
+         * 즉, lock이 풀린 상태일 가능성이 있다.
+         *
+         * 이 경우에는 바로 futex_wait로 잠들면 안 된다.
+         * 잠들기 직전에 lock이 풀린 상황일 수 있으므로,
+         * 다시 위로 올라가 lock 획득을 재시도한다.
+         */
+        if (v >= 0)
+            continue;
+        /*
+         * 여기까지 왔다는 것은 v < 0,
+         * 즉 최상위 bit가 1이고 lock이 여전히 잡혀 있다는 뜻이다.
+         *
+         * futex_wait(mutex, v)는
+         * 현재 *mutex 값이 v와 같을 때만 thread를 sleep시킨다.
+         *
+         * 만약 잠들기 직전에 다른 thread가 unlock해서
+         * *mutex 값이 바뀌었다면, futex_wait는 잠들지 않고 바로 돌아온다.
+         *
+         * 따라서 lost wakeup 문제를 방지할 수 있다.
+         */
+        futex_wait(mutex, v);
+    }
+}
+void mutex_unlock(int *mutex) {
+    /*
+     * atomic_add_zero(mutex, 0x80000000)
+     *
+     * 0x80000000은 최상위 bit만 1인 값이다.
+     * 이를 더하면 32-bit overflow 관점에서
+     * lock bit, 즉 31번 bit가 1에서 0으로 바뀐다.
+     *
+     * 쉽게 말해 lock을 푸는 동작이다.
+     *
+     * 그리고 연산 결과가 0이면 true를 반환한다고 보면 된다.
+     *
+     * 결과가 0이라는 것은:
+     *   lock bit를 풀었더니 mutex 전체 값이 0이 되었다는 뜻
+     *   즉 기다리는 thread가 없다는 뜻
+     */
+    if (atomic_add_zero(mutex, 0x80000000))
+        return; // 기다리는 thread가 없으므로 깨울 필요 없음
+    /*
+     * 여기까지 왔다는 것은 lock은 풀었지만,
+     * waiter count가 남아 있다는 뜻이다.
+     *
+     * 즉, 잠들어 있는 thread가 있을 수 있으므로
+     * futex_wake로 하나를 깨운다.
+     */
+    futex_wake(mutex);
+}
+```
+
+<Callout kind="note" title="futex_wait 의 expected 값 검사가 lost wakeup 을 막는다">
+futex_wait 의 두 번째 인자(<code>expected</code>) 는 <i>"잠들기 직전에 *mutex 가 여전히 이 값인가?"</i> 를 kernel 이 atomic 하게 확인하게 합니다. 잠들기 직전에 다른 thread 가 unlock 으로 mutex 를 바꿨다면 값이 달라지므로 kernel 은 잠들지 않고 바로 반환합니다 — Solaris 의 setpark 이 해결한 lost wakeup 을 futex 는 이 한 가지 인자로 우아하게 처리합니다.
+</Callout>
+
+### Two-Phase Locks
+
+Two-phase lock은 spin과 sleep을 섞은 방식이다.
+
+> 첫 번째 phase에서는 잠깐 spin한다.  
+lock이 곧 풀릴 것 같다면 굳이 sleep했다가 깨는 것보다, 짧게 기다렸다가 바로 lock을 얻는 편이 빠를 수 있다.
+
+하지만 일정 시간 spin해도 lock을 얻지 못하면 두 번째 phase로 넘어간다.  
+
+> 이때는 thread를 sleep 상태로 보내고, 나중에 lock이 풀릴 때 깨운다.
+> 즉, 짧은 대기에는 spin이 유리하고, 긴 대기에는 sleep이 유리하다는 점을 결합한 방식이다.
+
+<TwoPhaseLock caption="처음에는 짧게 spin — lock 이 금방 풀리면 context switch 없이 바로 얻을 수 있어 이득. 일정 spin 한계를 넘기면 sleep 으로 전환해 CPU 낭비를 막는다. spin 의 응답성과 sleep 의 효율을 결합한 hybrid." />
+
+### summary
+
+Hardware support로는 다음을 봤다.
+
+- Test-and-set
+- Compare-and-swap / compare-and-exchange
+- Load-linked / store-conditional
+- Fetch-and-add
+
+이들은 atomic instruction을 제공하여 mutual exclusion을 가능하게 한다.
+
+OS support로는 다음을 봤다.
+
+- yield
+- park / unpark
+- setpark
+- futex
+
+이들은 spin으로 CPU를 낭비하는 문제를 줄이기 위해 thread를 재우고 깨우는 기능을 제공한다.
+
+
+## 한 줄 요약
+
+<Callout kind="summary" title="Locks 한눈에">
+• lock 의 본질 — <b>critical section 을 한 atomic instruction 처럼</b> 보이게 만드는 것.<br/>
+• <b>Hardware support</b> — TAS / CAS / LL-SC / FAA. <b>test 와 set 사이를 막아 주는</b> atomic instruction 들.<br/>
+• 그 위에 <b>spinlock</b>(TAS), <b>fairness 개선</b>(FAA + Ticket Lock) 까지 가능.<br/>
+• <b>OS support</b> — yield / park-unpark / setpark / futex. spin 낭비를 막기 위해 thread 를 <b>재웠다 깨우는</b> 인프라.<br/>
+• 잠재우기에는 <b>lost wakeup race</b> 가 따라오고, <b>setpark / futex_wait(expected)</b> 가 그걸 끊는다.<br/>
+• 실전 mutex 는 <b>Two-Phase Lock</b> — 짧게 spin 해보고 안 되면 sleep.
+</Callout>

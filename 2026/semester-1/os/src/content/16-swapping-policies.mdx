@@ -1,0 +1,267 @@
+<Callout kind="summary" title="이 장의 목적">
+앞 장(Swapping: Mechanisms)이 *"page를 어떻게 disk와 memory 사이에서 옮기는가"* 를 다뤘다면, 이번 장은 **"메모리가 꽉 찼을 때 어떤 page를 victim으로 골라 내보낼 것인가"** 라는 **교체 정책(replacement policy)** 을 다룹니다. 정책의 좋고 나쁨을 재는 잣대인 **AMAT** 부터 시작해서, 이상적 기준인 **OPT**, 실제 정책인 **FIFO · Random · LRU**, 그리고 **Clock** 같은 근사 기법과 **thrashing** 까지 정리합니다.
+</Callout>
+
+지금까지는 page가 memory에 없으면 disk에서 가져온다는 것까지 봤다. 그런데 memory가 꽉 차 있으면 **누군가를 내보내야** 새 page를 올릴 수 있다. 그 *"누구를 내보낼까"* 를 결정하는 것이 **page-replacement policy** 다. 이번 장의 거의 모든 내용은 결국 **"miss(=page fault)를 줄여서 평균 메모리 접근 시간을 줄이자"** 라는 하나의 목표로 모인다.
+
+
+## 정책을 재는 잣대: AMAT
+
+좋은 정책인지 판단하려면 **점수를 매길 척도** 가 필요하다. 그 척도가 **AMAT (Average Memory Access Time)**, 즉 메모리에 접근할 때 걸리는 시간의 **평균** 이다.
+
+평균은 곧 **기댓값(expectation)** 이다. 고등학교에서 배운 기댓값을 떠올려 보자.
+
+```txt
+E = Σ ( Pᵢ × Tᵢ )
+```
+
+각 사건이 발생할 확률 `Pᵢ` 에 그 값 `Tᵢ` 를 곱해서 더한 것이다. AMAT도 똑같은 구조다. 메모리 접근은 두 가지로 갈린다.
+
+- **hit** — 찾는 page가 physical memory에 있음 → 메모리 접근 시간 `T_M`
+- **miss** — page fault가 떠서 disk까지 가야 함 → 디스크 접근 시간 `T_D`
+
+이때 `P_hit + P_miss = 1` 이다(둘 중 하나는 반드시 일어난다). 그래서 기댓값 정의대로 쓰면 왼쪽 식이 되고, 교과서에서 자주 쓰는 형태는 오른쪽 식이다.
+
+<AmatComparison caption="두 식의 차이는 T_M 앞에 P_hit 이 붙느냐다. 미스인지 확인하려면 어차피 물리 메모리(또는 페이지 테이블)를 한 번은 봐야 하므로, 실무 버전에서는 T_M 을 항상 더한다." />
+
+### 왜 교과서 버전은 T_M 을 항상 더할까?
+
+miss가 떴는지 **확인하려면** 어차피 physical memory(정확히는 page table/TLB)를 한 번은 봐야 한다. 즉 hit이든 miss든 `T_M` 은 **무조건 발생** 한다. 그래서 `P_hit` 를 떼고 `T_M` 을 고정 비용으로 두는 것이다.
+
+### 예제로 감 잡기
+
+`T_M = 100ns`, `T_D = 10ms` 라고 하자. 그리고 `P_hit = 0.9`, `P_miss = 0.1` 일 때 교과서 버전으로 계산하면:
+
+```txt
+AMAT = T_M + P_miss × T_D
+     = 100ns + 0.1 × 10ms
+     = 0.0001ms + 1ms
+     ≈ 1ms
+```
+
+<Callout kind="note" title="이 계산이 말해 주는 것">
+물리 메모리 접근(<code>100ns</code>)은 전체 평균(<code>≈1ms</code>)에서 거의 보이지도 않습니다. <b>disk 항(T_D)이 평균을 완전히 지배(dominant)</b> 합니다. 그러니 AMAT 를 줄이려면 못 바꾸는 <code>T_M</code>·<code>T_D</code> 대신 <b>P_miss 를 줄이는 것</b>, 즉 <b>hit rate 를 높이는 것</b>밖에 없습니다. 교체 정책이 노리는 지점이 바로 여기입니다.
+</Callout>
+
+
+## The Optimal Policy (OPT / MIN)
+
+가장 좋은 정책을 먼저 보자. **Optimal(최적)** 정책은 마치 **오라클(oracle)** 처럼 **미래를 전부 안다고 가정** 한다. 미래를 안다면 victim 선택은 자명하다. **앞으로 가장 나중에 쓰일(혹은 다시 안 쓰일) page** 를 내보내면 된다.
+
+예제로 보자. 참조 문자열(reference string)은 각 시점에 어떤 VPN을 접근하는지를 순서대로 나열한 것이다. physical memory에 frame이 **3개** 있다고 하자.
+
+<ReplacementTrace
+  policy="opt"
+  refs={[0, 1, 2, 0, 1, 3, 0, 3, 1, 2, 1]}
+  caption="각 칸은 그 시점에 frame 에 들어 있는 page. 파란 칸=새로 적재(miss), 초록 칸=이미 있어서 hit. 처음 비어 있던 세 번은 강제 miss(compulsory miss)."
+/>
+
+`3`을 처음 만나는 지점을 보자. memory가 꽉 차 있으니 `0, 1, 2` 중 하나를 내보내야 한다. 미래를 보면 `0`과 `1`은 곧 다시 쓰이지만 `2`는 한참 뒤(맨 끝)에야 쓰인다. 그래서 **가장 나중에 쓰일 `2`** 를 내보낸다.
+
+이 정책은 **그 어떤 정책도 이길 수 없는 상한선(upper bound)** 이다. 만약 어떤 정책이 OPT보다 좋게 나왔다면, 그건 내가 OPT를 잘못 구한 것이다.
+
+<Callout kind="tip" title="못 쓰는 정책을 왜 배울까?">
+미래를 알 수 없으니 OPT 는 <b>실제로 구현할 수 없습니다.</b> 그럼에도 배우는 이유는, 내가 새 정책을 만들었을 때 <b>"이론상 최선에 얼마나 가까운가"</b> 를 재는 기준선이 필요하기 때문입니다. OPT 에 근접하면 그 정책은 충분히 훌륭한 겁니다.
+</Callout>
+
+
+## FIFO — 가장 단순한 정책
+
+미래를 모르니 **과거** 만 보고 정책을 짤 수밖에 없다. 가장 간단한 것이 **FIFO(First-In First-Out)**: 중요도 같은 건 전혀 따지지 않고, **가장 먼저 들어온 page를 무조건 내보낸다.** 스케줄링에서 본 그 FIFO와 같은 발상이고, queue(큐) 하나로 쉽게 구현된다.
+
+<ReplacementTrace
+  policy="fifo"
+  refs={[0, 1, 2, 0, 1, 3, 0, 3, 1, 2, 1]}
+  caption="같은 참조열·같은 3 frame. FIFO 는 적재 순서만 보고 가장 오래된 page 를 내보낸다."
+/>
+
+같은 예제에서 OPT는 hit가 6번이었는데 FIFO는 4번뿐이다(54.6% → 36.4%). 왜 나빠졌을까? **장점은 단순함** 이다. 단순하면 버그도 적고 디버깅도 쉽다. 하지만 **단점은 중요도를 무시** 한다는 것. 위 예제에서 `0`은 11번 중 3번이나 쓰이는 자주 쓰는 page인데도, FIFO는 "먼저 들어왔다"는 이유만으로 `0`을 날려 버린다.
+
+### Belady's Anomaly
+
+직관적으로는 **frame을 늘리면 hit이 늘어 page fault가 줄어들** 것 같다. 10칸이 있으면 1칸일 때보다 당연히 더 많이 담을 수 있으니까. 그런데 FIFO에는 **frame을 늘렸는데 오히려 page fault가 늘어나는** 기이한 현상이 있다. 이를 **Belady's Anomaly(벨라디의 역설)** 라고 한다.
+
+<BeladyAnomalyChart caption="참조열 1,2,3,4,1,2,5,1,2,3,4,5 에서 FIFO 의 fault 수. frame 을 3→4 로 늘렸더니 9→10 으로 오히려 증가한다. OPT 같은 stack 알고리즘에서는 일어나지 않는다." />
+
+이런 역설이 생기는 이유 역시 FIFO가 **중요도를 고려하지 않고** 그저 순서대로 내보내기 때문이다.
+
+
+## Random — 의외로 나쁘지 않다
+
+**Random** 은 victim을 그냥 **무작위로** 고른다. `0, 1, 2`가 있으면 그중 하나를 동전 던지듯 뽑아 내보낸다. 아무 생각 없어 보여서 형편없을 것 같지만, **놀랍게도 가끔은 꽤 좋다.**
+
+같은 예제를 **10,000번 반복** 해서 hit 횟수의 분포를 그려 보면, 상당수 시도가 FIFO보다 좋고, 일부는 **OPT만큼(이 예제에서 hit 6번)** 좋게 나온다. 무작위성이 때로는 FIFO의 체계적인 실수를 피해 가기 때문이다.
+
+<Callout kind="note" title="여기서 얻는 교훈">
+어떤 정책도 <b>절대적으로 항상 나쁘거나 항상 좋지 않습니다.</b> 워크로드(접근 패턴)에 따라 순위는 얼마든지 바뀝니다. Random 조차 "그냥 막 하는데도 생각보다 괜찮은" 경우가 있다는 것이 핵심입니다.
+</Callout>
+
+
+## History를 보자: LRU
+
+과거로 미래를 예측한다면, **지역성(locality)** 을 활용하는 것이 자연스럽다.
+
+- **LRU (Least Recently Used)** — *최근에 쓴 page는 앞으로도 쓸 가능성이 높다* (시간 지역성). 그러니 **가장 오랫동안 안 쓰인 page** 를 내보낸다.
+- **LFU (Least Frequently Used)** — *자주 쓰는 page는 앞으로도 자주 쓴다*. 가장 **빈도가 낮은** page를 내보낸다.
+
+이 수업에서는 **LRU** 만 다룬다. LFU는 각 page의 접근 빈도를 **전부 카운트해서 저장** 해야 하는데, page가 수백만 개라면 그 카운터를 위한 메모리만으로도 MB 단위를 가볍게 넘어 **현실적으로 구현이 어렵기** 때문이다.
+
+<ReplacementTrace
+  policy="lru"
+  refs={[0, 1, 2, 0, 1, 3, 0, 3, 1, 2, 1]}
+  caption="LRU 는 '가장 오래 안 쓰인' page 를 victim 으로. 이 예제에서는 hit 6번으로 OPT 와 동일하게 나온다."
+/>
+
+### LRU도 공짜는 아니다
+
+LRU를 정확히 구현하려면 **가장 최근에 쓰인 순서** 를 항상 유지해야 한다. 예를 들어 doubly-linked list로 관리한다면:
+
+- page를 접근(hit)할 때마다 그 노드를 리스트에서 **찾아서** 맨 앞으로 **옮겨야** 한다.
+- 이 작업을 매 메모리 접근마다 모든 page에 대해 해야 하므로 **오버헤드가 상당히 크다.**
+
+그래서 "정확한 LRU"의 비용이 그 이점보다 커질 수 있다. → 뒤의 **Clock 알고리즘** 이 이 문제를 푼다.
+
+
+## 워크로드에 따라 달라진다
+
+특정 예제 하나의 hit rate는 그 예제에만 해당한다. 정책의 **보편적 성능** 을 보려면 다양한 접근 패턴(workload)에서 비교해야 한다. 가로축은 **캐시 크기(=physical memory의 page 수)**, 세로축은 **hit rate** 다.
+
+### 1) 지역성이 없는 워크로드
+
+100개 page를 **균등 무작위(uniform random)** 로 접근하는 경우다. 미래에 뭐가 나올지 전혀 예측할 수 없다.
+
+<WorkloadNoLocality caption="로컬리티가 없으면 OPT·LRU·FIFO·Random 이 거의 똑같다. hit rate ≈ 캐시 크기 / 전체 page 수 (예: 40칸이면 40%). 과거를 봐도 미래를 못 맞추니 정책 간 차이가 사라진다." />
+
+### 2) 80-20 워크로드
+
+접근의 80%가 전체 page의 20%(**hot page**)에 몰리는, 우리가 실제로 코딩할 때 흔히 보이는 패턴이다.
+
+<Workload8020 caption="로컬리티가 생기자 LRU 가 FIFO·Random 을 확실히 앞서고 OPT 에 근접한다. 과거(최근 사용)를 보고 hot page 를 지켜 내기 때문이다." />
+
+### 3) Looping-Sequential 워크로드
+
+`0, 1, 2, …, 49`를 반복해서 도는 패턴이다. 로컬리티가 있긴 한데, **LRU/FIFO에게는 최악** 인 극단적 사례다.
+
+<WorkloadLooping caption="캐시가 49칸일 때, 막 내보낸 page 가 바로 다음에 필요해지는 일이 반복된다. LRU·FIFO 는 50칸 미만에서 hit rate 0%, Random 이 오히려 낫다. 50칸이 되는 순간 100% 로 점프." />
+
+왜 49칸에서 LRU/FIFO가 0%가 될까? 50개를 순서대로 도는데 49칸밖에 없으면, 새 page를 넣을 때 **가장 오래된(=바로 다음 루프에서 곧 필요한) page** 를 내보내게 된다. 그래서 매번 miss가 난다. 반면 Random은 하필 그 "곧 쓸 page"를 뽑을 확률이 낮아 상대적으로 덜 나쁘다.
+
+<Callout kind="summary" title="여기까지의 결론">
+<b>절대적인 최강 정책은 없다.</b> 다만 우리가 실제로 마주치는 워크로드는 대개 80-20 처럼 <b>로컬리티가 있고</b>, 그럴 때 <b>LRU 가 OPT 에 가깝게 잘 동작</b>합니다. 그래서 LRU 를 쓰고 싶은데… 앞서 봤듯 정확한 LRU 는 구현 비용이 큽니다.
+</Callout>
+
+
+## Clock 알고리즘 — LRU를 싸게 흉내 내기
+
+정확한 LRU의 오버헤드를 피하려고 **LRU를 근사(approximate)** 하는 것이 **Clock 알고리즘** 이다. 핵심 도구는 page마다 두는 **use bit(reference bit)** 한 개다. 이 bit는 **"최근에 사용됐다"** 를 의미하며, page table entry(PTE)의 여유 bit 자리에 두면 된다(valid/protection bit 옆처럼).
+
+page들을 시계처럼 원형으로 늘어놓고 **시계 바늘(clock hand)** 을 둔다. 바늘은 **replacement가 필요할 때만** 움직인다.
+
+<ClockAlgorithm caption="바늘이 가리키는 page 의 use bit 가 1 이면 0 으로 리셋하고 다음 칸으로. 0 인 page 를 만나면 그 page 를 victim 으로 선택. page 가 접근(hit)되면 use bit 가 다시 1 로 세팅된다." />
+
+### 동작 규칙
+
+1. victim이 필요하면 바늘이 가리키는 page의 use bit를 본다.
+2. **use = 1** 이면 → 0으로 **리셋** 하고 바늘을 다음 칸으로 옮긴다. ("한 번 봐줬다")
+3. **use = 0** 인 page를 만나면 → 그 page를 **victim** 으로 내보낸다.
+4. 평소 page가 **접근(hit)** 되면 그 page의 use bit를 **1** 로 세팅한다.
+
+이렇게 하면 "한 바퀴 도는 동안 한 번도 안 쓰인 page"가 결국 걸려서 쫓겨난다. 즉 **최근에 안 쓰인 page를 내보내는 LRU의 정신** 을 1bit만으로 흉내 낸다.
+
+### Clock은 LRU와 "정확히" 같지 않다
+
+Clock은 **순서를 정확히 기억하지 못한다.** use bit는 "최근에 썼나/안 썼나"의 1bit일 뿐, A를 B보다 먼저 썼는지까지는 모른다. 그래서 한 바퀴 안에서 둘 다 use=0이 되면 **바늘이 도는 순서(물리적 배치 순서)** 로 victim이 정해진다. 결과적으로 Clock의 hit rate는 LRU에 **가깝지만 조금 낮게** 나온다 — **근사(approximation)** 라고 부르는 이유다.
+
+<Callout kind="tip" title="왜 Clock 으로 바꿨나?">
+LRU 의 링크드 리스트는 <b>노드를 찾아 맨 앞으로 옮기는 비용 + 그 구조를 유지하는 메모리</b>가 듭니다. Clock 은 page 당 <b>use bit 1개</b>만 추가하면 되고 리스트 재정렬도 없어, <b>관리 비용과 메모리 모두 훨씬 가볍습니다.</b> 성능을 약간 양보하고 구현 단순성을 얻은 트레이드오프입니다.
+</Callout>
+
+
+## Dirty Bit — 불필요한 disk write 줄이기
+
+page를 swap space로 내보낸 적이 있다면, 그 page를 다시 memory로 가져왔다가 **또 내보낼 때** 생각해 볼 게 있다. swap에는 **이전에 써 둔 사본이 그대로 남아 있다.** 만약 memory에서 그 page를 **읽기만 하고 수정하지 않았다면**, 내보낼 때 disk에 **다시 쓸 필요가 없다** — 이미 똑같은 내용이 disk에 있으니까.
+
+이걸 판단하려고 PTE에 **dirty bit(modified bit)** 를 둔다.
+
+<DirtyBitDecision caption="clean(dirty=0) page 는 swap 의 사본과 동일하므로 evict 시 disk write 를 생략한다. dirty(=1) page 만 디스크에 다시 써 준다. disk I/O 는 비싸므로 이 생략이 큰 이득." />
+
+disk write는 매우 비싼 연산이므로, **읽기 전용으로 쓰인 page(예: code segment)** 의 쓰기를 통째로 건너뛰는 이 최적화는 효과가 크다.
+
+
+## 가져올 때·내보낼 때 더 영리하게
+
+교체 정책 외에도, **disk I/O가 느리다** 는 근본 문제를 다루는 두 가지 기법이 더 있다.
+
+<PrefetchClustering caption="Prefetching: 지금 필요한 page 와 함께 곧 쓸 것 같은 page 를 미리 가져와 지연을 숨긴다. Clustering: 여러 page 쓰기를 모아 한 번의 큰 disk write 로 처리해 횟수를 줄인다." />
+
+- **Prefetching(미리 읽기)** — page 1을 가져올 때, 곧 page 2도 쓸 것 같으면 **미리 같이** 가져온다. code segment처럼 **순차적으로 접근** 하는 경우 다음 page를 쓸 확률이 높아 특히 효과적이다.
+- **Clustering / Grouping(모아 쓰기)** — 한 번에 한 page씩 쓰지 않고 **여러 page를 모았다가 한 번의 큰 write로** 처리한다. 디스크는 한 번 쓰기와 여러 개 모아 쓰기의 시간 차가 작기 때문에, write 횟수를 줄이면 그만큼 빨라진다.
+
+
+## 그래도 메모리가 부족하면: Thrashing
+
+swapping은 결국 **부족한 물리 메모리를 disk로 메우는** 기법이다. 그런데 **동시에 도는 프로세스가 너무 많아지면(over-subscription)** 한계가 온다.
+
+프로세스 A, B, C가 있고 메모리가 거의 꽉 찼다고 하자. A가 메모리를 쓰려다 공간이 없어 **replacement(=disk I/O)** 를 요청하고 blocked된다. 그 사이 B로 context switch 했더니 B도 메모리가 부족해 **또 disk I/O** 를 요청한다. C도 마찬가지. 결국 **모두가 disk만 기다리고 CPU는 놀게** 된다.
+
+<ThrashingChart caption="동시 프로세스 수를 늘리면 CPU 사용률이 오르다가, 어느 임계점을 넘는 순간 급격히 무너진다(thrashing). 모두가 page fault 처리(disk I/O)에 묶여 정작 CPU 연산은 멈춘 것처럼 보인다." />
+
+이 현상을 **thrashing(스래싱)** 이라고 한다. CPU 사용률이 어느 임계점까지는 multiprogramming과 함께 오르지만, 그 지점을 넘으면 **page fault 처리에 모든 시간이 빨려 들어가** CPU 사용률이 급락한다.
+
+
+## 한 걸음 더: 정책(policy)과 실행 주체(daemon)는 다르다
+
+여기서 한 가지 자주 헷갈리는 점을 짚고 가자. *"LRU/Clock 은 그럼 swap daemon 인가?"* 라는 질문이다. 답부터 말하면 **아니다.** 둘은 역할이 분명히 다르다.
+
+<PolicyVsDaemon caption="daemon 은 메모리를 실제로 회수하는 실행 주체, policy 는 그 daemon 이 victim 을 고를 때 따르는 규칙. Clock·LRU·FIFO 는 모두 policy 쪽에 속한다." />
+
+- **swap / page daemon** (예: Linux의 `kswapd`) — *실행 주체*. free memory가 low watermark 아래로 떨어지면 깨어나서 페이지 회수를 **실제로 수행** 한다.
+- **Clock · LRU · FIFO** — *선택 규칙*. *"누구를 victim으로 골라야 하나"* 의 기준만 정의한다. 스스로 실행되지는 않는다.
+
+즉, daemon이 일을 하다가 **"victim을 골라야 하네"** 라는 단계에 도달했을 때, 그 결정에 **Clock 같은 policy를 호출** 하는 구조다. 비유하자면 **daemon은 청소부, policy는 "어떤 물건부터 버릴지" 정하는 규칙** 이다.
+
+### LRU/Clock 자체는 lazy한가?
+
+이 질문은 **15장에서 본 Lazy approach vs Page daemon 구분** 과 자연스럽게 연결된다. 정리하면:
+
+- **page replacement 자체는 보통 lazy** 다 — 공간이 정말 필요해질 때까지 page를 미리 쫓아내지 않고, 그 순간이 와야 victim을 고른다. LRU/Clock도 그 순간에 호출되는 규칙이므로 *replacement 측면에서는 lazy* 하다.
+- **단, "관리 비용"의 lazy 정도는 LRU와 Clock이 다르다.**
+
+<Callout kind="note" title="LRU 와 Clock 의 lazy 정도">
+<b>LRU</b> — victim 선택은 lazy(필요할 때만). 하지만 <b>최근성(recency) 정보는 매 접근마다 갱신</b> 해야 정확하다. 그래서 <i>관리 측면에서는 오히려 eager</i>.<br />
+<b>Clock</b> — page 접근 시에는 <b>accessed/use bit 만 1로 세트</b> 해 두고, 누가 victim 인지의 판단은 <b>나중에 hand 가 돌 때 몰아서</b> 한다. 그래서 <i>LRU 보다 더 lazy 한 근사 LRU</i> 다.
+</Callout>
+
+### "demand paging의 lazy" 와 헷갈리지 말 것
+
+"lazy"라는 단어는 메모리 가상화에서 두 군데에서 나타난다. 의미가 다르다.
+
+| 어디서? | 무엇이 lazy? | 예 |
+| --- | --- | --- |
+| **Demand paging** | *page 적재(load)* 가 lazy | 프로세스 시작 시 모든 page를 안 올리고, 접근 시점에 page fault로 load |
+| **Page replacement** | *page 제거(evict)* 가 lazy | 메모리가 부족해질 때까지 안 쫓아내다가, 그 시점에 victim 선택 |
+
+LRU/Clock은 **두 번째(replacement 쪽)** 에 해당한다.
+
+### Linux는 사실 완전한 lazy가 아니다
+
+15장에서 본 watermark / page daemon 절을 떠올려 보면, Linux는 free page가 **low watermark** 아래로 떨어지면 `kswapd` 가 깨어나 **사용자 프로세스가 page fault로 직접 막히기 전에** background에서 미리 회수한다. 그래서 실제 시스템은 **"필요할 때 reclaim 한다는 점에서는 lazy 철학 + watermark 이하에서는 proactive background reclaim"** 의 혼합 형태다.
+
+또 한 가지 — Linux의 reclaim 정책은 **순수 Clock이 아니라** `active`/`inactive` LRU 리스트나 MGLRU 같은 **근사 LRU 계열** 이다. 교과서의 Clock은 개념을 잡기 좋은 단순화된 모델로 이해하면 된다.
+
+<Callout kind="tip" title="한 줄로">
+<b>Clock 알고리즘은 swap daemon 이 아니다.</b> Clock 은 swap daemon(또는 page reclaim 코드)이 <b>victim 을 고를 때 따르는 규칙</b>일 뿐입니다. 실행 주체와 선택 규칙을 헷갈리지 않는 것이 핵심.
+</Callout>
+
+
+## 한 줄 요약
+
+<Callout kind="summary" title="교체 정책 한눈에">
+교체 정책의 목표는 <b>miss(page fault)를 줄여 AMAT 를 낮추는 것</b>입니다.
+<br />• <b>OPT</b> — 미래를 아는 이상적 상한선(구현 불가, 벤치마크용)
+<br />• <b>FIFO</b> — 가장 오래된 것 제거. 단순하지만 중요도 무시 → Belady's Anomaly
+<br />• <b>Random</b> — 무작위. 의외로 나쁘지 않고 가끔 좋음
+<br />• <b>LRU</b> — 최근성 활용. 로컬리티 있는 워크로드에서 OPT 에 근접하나 구현 비쌈
+<br />• <b>Clock</b> — use bit 1개로 LRU 를 싸게 근사
+<br />추가로 <b>dirty bit</b> 로 불필요한 write 를 생략하고, <b>prefetching·clustering</b> 으로 disk I/O 를 영리하게 다루며, 메모리가 과하게 부족하면 <b>thrashing</b> 에 빠집니다.
+</Callout>

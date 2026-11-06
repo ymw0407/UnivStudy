@@ -1,0 +1,446 @@
+<Callout kind="summary" title="이 장의 목적">
+지금까지는 모든 page가 물리 메모리에 들어 있다고 가정했지만, 현실에서는 메모리가 부족할 수 있습니다. 이번 장에서는 **disk의 일부를 메모리 보조 공간(swap space)** 으로 활용해서 물리 메모리보다 큰 주소 공간을 가진 것처럼 보이게 만드는 메커니즘과, 그 과정에서 발생하는 **page fault**의 처리 흐름을 정리합니다.
+</Callout>
+
+지금까지는 physical memory 안에서만 page를 관리한다고 생각했다. 하지만 실제 시스템에서는 physical memory가 항상 충분하지 않다. 그래서 운영체제는 **disk의 일부 공간을 사용해서**, 당장 자주 쓰지 않는 page를 잠시 밖으로 밀어낼 수 있다. 이 메커니즘을 **swapping** 이라고 한다.
+
+
+## Beyond Physical Memory
+
+OS는 *"현재 별로 쓰이지 않는 주소 공간 일부를 어딘가에 보관해 둘 장소"* 가 필요하고, 현대 시스템에서는 보통 그 자리를 **hard disk drive** 가 담당한다.
+
+컴퓨터의 저장 계층은 대략 다음과 같은 구조를 가진다.
+
+- register
+- cache
+- main memory
+- mass storage (hard disk, tape, SSD 등)
+
+위로 갈수록 빠르지만 용량이 작고, 아래로 갈수록 느리지만 용량이 크다.
+
+<Figure
+  src="/figures/ch15-mem-hierarchy.png"
+  caption="Memory Hierarchy in modern system — 위쪽은 빠르고 작고, 아래쪽은 느리고 크다."
+  source="OSTEP 15_Swapping_Mechanisms 강의자료"
+/>
+
+지금까지 다룬 physical memory는 main memory, 즉 **DRAM** 에 해당한다. DRAM은 빠르지만 용량이 제한적이다. 프로세스가 많아지거나 각 프로세스가 많은 메모리를 요구하면 physical memory가 부족해질 수 있다. 그렇다고 해서 무조건 실행을 중단할 수는 없으므로, OS는 비교적 큰 저장 공간인 disk의 일부를 메모리 보조 공간처럼 활용한다.
+
+> 당장 자주 쓰지 않는 page를 disk로 내보내고, 나중에 다시 필요해지면 disk에서 physical memory로 가져온다.
+
+이렇게 하면 physical memory보다 더 큰 address space를 가진 프로그램도 실행할 수 있는 것처럼 보이게 만들 수 있다.
+
+
+## Swap Space
+
+> Swap space는 page를 physical memory와 disk 사이에서 옮기기 위해 disk에 따로 예약해 둔 공간
+
+OS는 disk 전체를 무작정 쓰는 것이 아니라, 그중 일부를 swap을 위한 영역으로 잡아 둔다. 그리고 이 swap space를 **page-sized unit** 으로 관리한다.
+
+paging을 배운 뒤부터는 메모리 관리 단위가 page였듯이, swap을 할 때도 page 하나를 통째로 disk로 내보내거나, disk에서 다시 page 하나를 가져온다.
+
+<Figure
+  src="/figures/ch15-swap-space.png"
+  caption="Physical Memory와 Swap Space — 둘 다 page 단위(PFN, Block)로 관리된다."
+  source="OSTEP 15_Swapping_Mechanisms 강의자료"
+/>
+
+<MemorySwapLayout caption="Physical Memory의 각 PFN과 Swap Space의 각 Block은 같은 page 단위로 관리된다. 같은 (Proc, VPN) 쌍이 위/아래로 옮겨 다닐 뿐이다." />
+
+여기서 중요한 점은, **swap space에 있는 page도 여전히 어떤 프로세스의 어떤 VPN에 해당** 한다는 것이다. 단지 현재 physical memory에 없을 뿐이다.
+
+### Page 단위로 옮긴다
+
+Swapping은 byte 단위나 segment 단위가 아니라, 기본적으로 **page 단위** 로 일어난다. paging 시스템에서는 virtual address space를 page로 나누고, physical memory도 page frame으로 나누어 관리하기 때문이다.
+
+<PageMovement caption="Physical Memory의 한 page 전체가 Swap Space의 한 block 전체로 옮겨진다. 부분이 아닌 page 단위." />
+
+이때 physical memory에서 빠져나간 frame은 **free frame**이 되고, OS는 그 공간을 다른 page를 올리는 데 사용할 수 있다.
+
+### 어떤 page를 내보낼 것인가?
+
+직관적으로는 **앞으로 잘 안 쓸 page**를 내보내는 것이 좋다. 하지만 *"앞으로 안 쓸 page"* 를 정확히 아는 것은 불가능하다. 그래서 OS는 여러 정책을 사용한다.
+
+- FIFO
+- Random
+- LRU
+- Clock algorithm
+
+> 이 내용은 Swapping: Policies 장에서 본격적으로 다룬다.
+
+이번 장의 중심은 **"page를 disk로 내보내고 다시 가져오는 과정이 어떻게 동작하는가"** 다.
+
+
+## Present Bit
+
+Swapping을 지원하려면 page table entry에 추가 정보가 필요하다. 그중 핵심이 **present bit** 이다. 하드웨어가 PTE를 봤을 때, 해당 page가 physical memory에 있는지 disk에 있는지를 알아야 하기 때문이다.
+
+PTE에는 이미 여러 bit가 있었다.
+
+- PFN
+- valid bit
+- protection bit
+- **present bit** ← swapping을 위해 추가
+- accessed bit
+- dirty bit
+
+| Value | Meaning |
+| :---: | :--- |
+| **1** | page is present in physical memory |
+| **0** | The page is not in memory but rather on disk |
+
+### Valid Bit vs Present Bit
+
+둘은 비슷해 보이지만 의미가 다르다.
+
+<Callout kind="note" title="Valid bit vs Present bit">
+- **Valid bit** — 이 VPN이 프로세스의 *합법적인 주소 공간* 에 속하는가? <br/>
+- **Present bit** — 이 *합법적인 page* 가 지금 physical memory에 있는가?
+</Callout>
+
+**Valid Bit**
+
+- `valid = 1` → 이 VPN은 프로세스의 유효한 address space에 속한다.
+- `valid = 0` → 이 VPN은 애초에 접근하면 안 되는 주소다. → **segmentation fault**
+
+예를 들어 프로세스의 주소 공간에 존재하지 않는 VPN을 접근했다면, 그건 *"disk에 있다"* 의 문제가 아니라 *"애초에 접근하면 안 되는 주소"* 다.
+
+**Present Bit**
+
+- `present = 1` → physical memory에 있다.
+- `present = 0` → 유효한 page이긴 한데, 지금은 physical memory에 없고 disk에 있다.
+
+따라서 present bit가 0인 page에 접근하면 **page fault** 가 발생한다.
+
+> Page fault는 잘못된 주소 접근이라기보다는 *"이 주소는 유효하다. 그런데 지금 physical memory에 없으니 disk에서 가져와야 한다"* 에 가깝다.
+
+### Valid와 Present의 관계
+
+<ValidPresentMatrix caption="조건이 누적되는 순서가 곧 검사 순서다. Valid → Protection → Present." />
+
+
+## Page Fault
+
+> 접근하려는 page가 현재 physical memory에 없을 때 발생하는 fault
+
+CPU가 어떤 virtual address에 접근하려고 했는데, page table을 확인해 보니 해당 PTE의 `present bit = 0` 이면 page fault가 발생한다. 이때 page fault는 **trap의 한 종류** 로 처리된다.
+
+Limited Direct Execution에서 봤듯이, system call이나 exception은 trap을 통해 kernel mode로 들어간다. page fault도 마찬가지다.
+
+<PageFaultTrapFlow caption="present bit = 0 한 비트로부터 시작해서 page fault handler까지 이어지는 trap 경로." />
+
+운영체제는 page fault handler에서 다음 일을 한다.
+
+1. 이 page가 정말 disk에 있는지 확인한다.
+2. physical memory에 빈 frame이 있는지 찾는다.
+3. 없으면 다른 page를 내보내서 빈 frame을 만든다.
+4. disk에서 해당 page를 읽어와 physical frame에 넣는다.
+5. PTE를 업데이트한다.
+6. fault가 났던 instruction을 **다시 실행** 한다.
+
+
+## Page Replacement
+
+page fault가 발생해서 disk에 있던 page를 가져오려면 physical memory에 빈 frame이 필요하다. 그런데 physical memory가 꽉 차 있으면 어떻게 해야 할까?
+
+이때 기존에 memory에 있던 page 중 하나를 disk로 내보내야 한다. 이 과정을 넓게 보면 **page replacement** 라고 한다.
+
+<ReplacementSteps caption="Replacement는 결국 '빈 frame을 만들기 위해 누군가를 내보내는' 작업이다. 누구를 내보낼지가 정책의 핵심." />
+
+> *"어떤 page를 골라 내보낼 것인가"* 가 **replacement policy** 다.
+
+### Replacement는 언제 수행할까?
+
+page를 disk로 내보내는 시점은 크게 두 가지 방식으로 생각할 수 있다.
+
+#### 1. Lazy Approach
+
+physical memory가 **완전히 꽉 찰 때까지 기다리는** 방식이다.
+
+<LazyApproachFlow caption="Lazy — '필요해질 때까지 미루는' 방식. 단순하지만 매 요청마다 disk I/O 한 번이 끼어든다." />
+
+단순하게 들리지만 실제로는 비현실적이다. **disk I/O는 매우 느리기** 때문이다. 프로세스가 당장 memory에 뭔가 올려야 하는 순간 physical memory가 꽉 차 있다면, OS는 먼저 page를 disk로 내보내야 하고 그동안 프로세스는 기다려야 한다. 즉, memory access 또는 allocation이 disk write 때문에 막힌다.
+
+더 큰 문제는 memory가 한 번 꽉 차기 시작하면 이후에도 계속 꽉 찬 상태가 유지될 가능성이 높다는 것이다.
+
+<MemoryFullCycle caption="한 번 꽉 차기 시작하면 이후 요청마다 disk write가 끼어들면서 같은 패턴이 반복된다." />
+
+#### 2. Swap Daemon / Page Daemon
+
+더 현실적인 방식은 physical memory가 **완전히 꽉 차기 전에 미리 free page를 확보** 해 두는 것이다. 이를 위해 OS는 background thread를 사용한다. 이를 **swap daemon** 또는 **page daemon** 이라고 부른다.
+
+핵심은 **watermark** 다.
+
+- **Low Watermark (LW)** — 이 아래로 free page가 떨어지면 daemon 시작
+- **High Watermark (HW)** — 이 위까지 free page가 회복되면 daemon 정지
+
+<WatermarkDaemonFlow caption="왼쪽 게이지는 free page 수. LW 아래로 내려가면 daemon이 깨어나서 HW 위로 회복될 때까지 background에서 evict 한다." />
+
+> 메모리가 바닥날 때까지 기다리지 말고, 미리 여유 공간을 만들어 두자.
+
+| | Lazy Approach | Page Daemon |
+| --- | --- | --- |
+| 시점 | memory가 완전히 찰 때까지 기다림 | memory가 완전히 차기 전에 미리 동작 |
+| 처리 | 필요할 때마다 page 하나를 내보냄 | background에서 여러 page를 내보냄 |
+| 영향 | 요청한 프로세스가 disk I/O를 기다림 | free frame을 일정 수준 이상 유지 |
+| 평가 | 단순하지만 느림 | 실제 요청 시 대기 시간을 줄일 수 있음 |
+
+
+<a id="page-fault-control-flow" />
+## Page Fault Control Flow
+
+이제 실제 page fault가 어떤 흐름으로 발생하고 처리되는지 단계별로 살펴본다. 아래 그림은 **OS가 page fault를 받았을 때 PTE를 보고 disk에 요청을 내고, 그 결과를 받아 page table을 갱신한 뒤 instruction을 재실행** 하는 전체 흐름을 보여 준다.
+
+<Figure
+  src="/figures/ch15-page-fault-flow.png"
+  caption="Page Fault Control Flow — 그림 속 ①~⑥ 번호가 아래 코드의 단계 주석과 1:1로 대응됩니다."
+  source="OSTEP 15_Swapping_Mechanisms 강의자료 (p.7)"
+/>
+
+> 그림 안의 `1.` ~ `6.` 번호가 곧 아래 코드의 `[그림 N]` 주석 번호다.
+
+| 그림 단계 | 의미 |
+| :---: | :--- |
+| **① Reference** | 프로세스가 virtual address를 참조 → CPU/MMU가 PTE 확인 |
+| **② Trap** | `PTE.Present == false` → page fault 발생, kernel mode로 진입 |
+| **③ Check** | OS가 PTE를 보고 swap space의 어느 위치에 page가 있는지 확인 |
+| **④ Get the page** | disk에서 해당 page를 읽어 빈 physical frame으로 가져옴 |
+| **⑤ Reset Page Table** | `PTE.Present = true`, `PTE.PFN = 새 PFN` 으로 갱신 |
+| **⑥ Re-instruction** | fault가 났던 instruction을 처음부터 다시 실행 |
+
+
+### Page Fault Control Flow — Hardware
+
+가상 주소 접근이 일어나면 하드웨어가 먼저 VPN을 뽑고 TLB를 확인한다.
+
+```c
+// =========================================================
+// [그림 ① Reference]
+// 프로세스가 virtual address를 참조 → CPU/MMU 변환 시도
+// =========================================================
+VPN = (VirtualAddress & VPN_MASK) >> SHIFT;
+(Success, TlbEntry) = TLB_Lookup(VPN);
+
+if (Success == True) {
+    // -----------------------------------------------------
+    // TLB Hit — 최근에 사용된 valid/present translation
+    // (이 경로에서는 보통 page fault가 일어나지 않는다)
+    // -----------------------------------------------------
+    if (CanAccess(TlbEntry.ProtectBits) == True) {
+        Offset   = VirtualAddress & OFFSET_MASK;
+        PhysAddr = (TlbEntry.PFN << SHIFT) | Offset;
+        Register = AccessMemory(PhysAddr);
+    } else {
+        RaiseException(PROTECTION_FAULT);
+    }
+} else {
+    // -----------------------------------------------------
+    // TLB Miss — page table을 직접 봐야 한다
+    // -----------------------------------------------------
+    PTEAddr = PTBR + (VPN * sizeof(PTE));
+    PTE     = AccessMemory(PTEAddr);
+
+    if (PTE.Valid == False) {
+        // ─ valid = 0 → 합법적인 주소가 아님
+        RaiseException(SEGMENTATION_FAULT);
+
+    } else if (CanAccess(PTE.ProtectBits) == False) {
+        // ─ 권한 없음
+        RaiseException(PROTECTION_FAULT);
+
+    } else if (PTE.Present == True) {
+        // ─ 메모리에 있음 → TLB만 갱신하고 재시도
+        TLB_Insert(VPN, PTE.PFN, PTE.ProtectBits);
+        RetryInstruction();
+
+    } else {
+        // =========================================================
+        // [그림 ② Trap]
+        // valid = 1, protection OK, present = 0
+        //   → page는 swap space에 있음
+        //   → PAGE_FAULT 발생, kernel mode page fault handler로 진입
+        // =========================================================
+        RaiseException(PAGE_FAULT);
+    }
+}
+```
+
+> 검사 순서가 중요하다. **Valid → Protection → Present** 순으로 확인하며, present는 valid/protection이 통과된 뒤에만 의미가 있다.
+
+
+### Page Fault Control Flow — Software
+
+`PAGE_FAULT` 가 발생하면 이제 OS의 **page fault handler** 가 실행된다. 아래 코드는 그림의 ③~⑥ 단계에 정확히 대응한다.
+
+```c
+// =========================================================
+// [그림 ③ Check whether the page exists in storage]
+// PTE를 보고 이 page가 swap space의 어디에 있는지 확인한다.
+// =========================================================
+DiskAddr = PTE.DiskAddr;
+
+// ---------------------------------------------------------
+// (준비) page를 담을 physical frame을 확보한다.
+// 빈 frame이 없다면 replacement algorithm으로 victim을 evict.
+// ---------------------------------------------------------
+PFN = FindFreePhysicalPage();
+if (PFN == -1) {
+    PFN = EvictPage();          // run replacement algorithm
+}
+
+// =========================================================
+// [그림 ④ Get the page]
+// swap space의 page를 확보한 physical frame으로 읽어온다.
+// disk I/O 동안 프로세스는 sleep 상태가 된다.
+// =========================================================
+DiskRead(DiskAddr, PFN);        // sleep, waiting for I/O
+
+// =========================================================
+// [그림 ⑤ Reset Page Table]
+// 이제 page가 memory에 올라왔으므로 PTE를 갱신한다.
+// =========================================================
+PTE.Present = True;             // memory에 존재함
+PTE.PFN     = PFN;              // 새 physical frame 번호
+
+// =========================================================
+// [그림 ⑥ Re-instruction]
+// 처음 page fault를 일으킨 instruction을 다시 실행한다.
+// 이번에는 PTE.Present == True 이므로 정상 접근 가능.
+// =========================================================
+RetryInstruction();
+```
+
+
+### RetryInstruction이 필요한 이유
+
+page fault가 발생했다는 건 어떤 instruction이 memory에 접근하려다 실패했다는 뜻이다.
+
+```c
+movl 0x0(%ebx), %eax
+```
+
+이 instruction이 접근하려는 virtual address의 page가 memory에 없으면 page fault가 난다. OS가 page를 disk에서 가져오고 PTE를 수정한다고 해서 원래 instruction이 자동으로 완료되는 것은 아니다. 따라서 OS는 **원래 실패했던 instruction을 다시 실행** 해야 한다.
+
+<RetryInstructionFlow caption="OS가 page를 disk에서 가져왔다고 끝이 아니다. fault를 일으킨 instruction을 같은 PC에서 한 번 더 실행해야 한다." />
+
+
+## PTE에는 disk 위치도 필요하다
+
+`present bit = 0` 이면 PFN 필드는 더 이상 *현재 physical memory 위치* 를 의미할 수 없다. 해당 page는 memory에 없기 때문이다. 따라서 OS는 **이 page가 swap space의 어디에 있는지** 알아야 한다.
+
+강의 코드에서는 이를 다음처럼 표현한다.
+
+```c
+DiskRead(PTE.DiskAddr, PFN);
+```
+
+즉, PTE 또는 OS의 별도 자료구조에는 다음 정보가 있어야 한다.
+
+<Callout kind="note" title="PTE가 disk 위치를 가리킬 때">
+- 이 VPN은 현재 <b>memory에 없음</b>
+- 대신 <b>swap space의 disk block N</b>에 있음
+</Callout>
+
+그래야 page fault handler가 해당 page를 disk에서 찾아올 수 있다.
+
+<Callout kind="tip" title="구현 팁">
+실제 시스템에서는 같은 PTE의 PFN 필드를 <b>present 상태에 따라 의미를 바꿔서 재활용</b> 하는 경우가 많습니다. <code>present == 1</code> 이면 PFN, <code>present == 0</code> 이면 disk 주소(swap slot 번호)로 해석하는 식이죠.
+</Callout>
+
+
+## PFN은 고정되지 않는다
+
+페이지가 swap out되면 그 page가 차지하던 physical frame은 비게 되고, **다른 page가 그 frame을 쓸 수 있다**. 따라서 같은 VPN이 나중에 swap in될 때 **이전과 같은 PFN으로 돌아온다는 보장이 없다**. page fault handler가 `PTE.PFN = PFN` 으로 갱신하는 이유가 바로 이것이다.
+
+<PfnReassignment caption="같은 VPN 2가 시간에 따라 PFN 5 → disk block 10 → PFN 8 로 바뀐다. swap out이 일어나면 PTE의 PFN 자리는 disk address로 의미가 바뀌고, swap in 시점에는 새로 확보된 PFN으로 덮어쓴다." />
+
+<Callout kind="note" title="present 상태에 따라 PTE 필드의 의미가 바뀐다">
+- <code>present = 1</code> → <b>PFN</b>을 보고 DRAM에 접근
+- <code>present = 0</code> → <b>disk address</b>를 보고 swap space에 접근
+</Callout>
+
+그래서 OS 입장에서는 “이 VPN의 PFN을 그대로 다시 쓸 수 있나?”를 가정하면 안 되고, swap in 때마다 free frame을 새로 확보해서 PTE를 갱신해야 한다. 이 갱신을 까먹으면 다음 접근에서 잘못된 physical address로 가게 된다.
+
+
+## Swapping과 TLB의 연결
+
+TLB는 최근 사용한 VPN → PFN 변환을 저장하는 캐시다. 그런데 어떤 page가 swap out되어 disk로 나가면, **그 page의 기존 PFN 매핑은 더 이상 유효하지 않다**.
+
+따라서 실제 시스템에서는 swap out이 일어날 때 관련 TLB entry도 무효화해야 한다. 그렇지 않으면 TLB가 예전 PFN을 계속 들고 있어서 잘못된 physical memory를 접근할 수 있다.
+
+강의의 단순화된 흐름에서는 다음처럼 이해하면 된다.
+
+<TlbHitMissFlow caption="TLB hit이면 page table까지 가지 않고 바로 접근. miss여야 PTE 검사를 통해 page fault 여부가 드러난다." />
+
+
+## Swap Space까지 꽉 차면?
+
+> *"Physical memory도 꽉 차고, swap space도 꽉 차면 어떻게 되는가?"*
+
+그 경우 OS는 더 이상 page를 내보낼 공간도 없고, 새로운 memory 요구를 만족시키기도 어렵다. 현실적인 시스템에서는 다음과 같은 상황으로 이어질 수 있다.
+
+- memory allocation 실패
+- 프로세스 강제 종료
+- **OOM(Out-Of-Memory) killer** 동작
+- 시스템이 매우 느려지거나, 심하면 시스템이 멈춘 것처럼 보임
+
+
+## 운영체제 전체 흐름으로 보기
+
+지금까지 본 page fault 처리를 시스템 컴포넌트 관점에서 정리하면 다음과 같다.
+
+<SystemComponentPipeline caption="User process의 load 한 줄이 어떻게 disk까지 내려가는지 — Kernel의 VM subsystem → Block I/O → Driver/Controller → 다시 Kernel로 돌아오는 전체 경로." />
+
+그리고 page daemon과 foreground 프로세스가 동시에 동작하는 시나리오는 다음과 같다.
+
+<PageDaemonScenarios caption="Page daemon이 background에서 evict를 진행하는 동안 foreground 프로세스가 memory read를 시도하면 page의 위치(DRAM/swap)와 free frame 여부에 따라 세 가지 경로로 갈린다." />
+
+
+## 한 걸음 더: page fault가 나면 데이터를 어디서 가져올까?
+
+여기서 자주 헷갈리는 점이 하나 있다. *"page fault가 났을 때, 이 데이터가 swap space에 있는지 아니면 다른 곳에 있는지를 누가 판단하는가?"* 이다.
+
+핵심은 **하드웨어는 "지금 DRAM에 없다" 까지만 판단한다** 는 것이다. MMU는 PTE의 `Valid → Protection → Present` 를 확인하고, `present = 0` 이면 그냥 `PAGE_FAULT` 를 일으킬 뿐이다. *"그럼 어디서 가져와야 하는가"* 는 전적으로 **OS의 page fault handler** 몫이다.
+
+<FaultDecisionLevels caption="하드웨어는 'DRAM에 없음' 까지만 본다. backing store가 swap인지 파일인지 zero-fill인지는 OS가 PTE와 주소 공간 metadata를 보고 결정한다." />
+
+그래서 page fault가 났다고 **무조건 swap space에서 가져오는 것은 아니다.** OS는 해당 virtual address의 metadata(PTE + 주소 공간의 VMA 정보)를 보고 backing store가 어디인지 결정한다.
+
+<BackingStoreBranch caption="같은 present = 0 이라도 OS가 보는 출처는 다르다. 강의 코드의 PTE.DiskAddr 는 이 'page가 disk 어디에 있는지' 를 단순화한 표현이다." />
+
+- **Anonymous page가 swap-out된 경우** (heap·stack 등): 예전에 DRAM에 있다가 쫓겨난 page → **swap space** 에서 가져온다.
+- **File-backed page가 아직 안 올라온 경우** (실행 코드·공유 라이브러리·mmap된 파일): 아직 한 번도 메모리에 없던 page → **원본 파일** 에서 가져온다.
+- **새 anonymous page** (malloc 후 처음 접근): 가져올 disk 데이터 자체가 없음 → disk read 없이 **zero-fill** 된 새 frame을 준다.
+- **잘못된 주소** (`valid = 0`): 애초에 가져올 곳이 없음 → **segmentation fault**.
+
+<Callout kind="note" title="강의 코드의 단순화">
+강의의 <code>DiskRead(PTE.DiskAddr, PFN)</code> 은 위의 여러 경우를 하나로 단순화한 표현입니다. 실제 OS에서는 이 정보가 항상 PTE 안에 깔끔하게 들어 있다기보다, swapped-out page면 PTE에 swap slot이 기록되고, file-backed page면 VMA가 "이 주소는 어느 파일의 offset" 인지를 알고 있는 식으로 나뉩니다.
+</Callout>
+
+### Demand Paging vs Swapping
+
+`present = 0 → page fault` 는 공통 메커니즘이고, **demand paging** 과 **swapping** 은 그 page fault가 *왜* 났는지(= 출처가 어디인지)가 다르다.
+
+- **Demand Paging** — 처음부터 DRAM에 올리지 않고, **실제로 접근되는 순간** page fault를 통해 그때그때 올리는 전략. 대상 page는 보통 *아직 한 번도 DRAM에 올라온 적이 없다.*
+- **Swapping** — 이미 DRAM에 있던 page를 메모리 부족 때문에 **swap space로 내보냈다가**, 다시 접근될 때 가져오는 전략. 대상 page는 *예전에 DRAM에 있다가 쫓겨났다.*
+
+| 구분 | Demand Paging | Swapping |
+| --- | --- | --- |
+| 핵심 | 필요한 page만 나중에 로드 | 안 쓰는 page를 disk로 내렸다가 다시 로드 |
+| page의 이전 상태 | 아직 DRAM에 올라온 적 없음 | 이미 DRAM에 있다가 evict됨 |
+| page fault 이유 | "아직 안 올렸음" | "올려놨었는데 swap out됨" |
+| 가져오는 곳 | 실행 파일·mmap 파일·zero-fill 등 | swap space |
+| 공통점 | 둘 다 `present = 0` 이면 page fault로 처리, handler가 DRAM에 올린 뒤 instruction 재실행 | |
+
+<Callout kind="tip" title="우리 강의 흐름에서의 위치">
+초반(Address Space ~ Paging)에서는 이해를 위해 <b>"page가 이미 메모리에 올라와 있다"</b> 고 가정하고 주소 변환에 집중했습니다. demand paging은 Process Creation에서 현대 OS의 <i>lazy loading</i> 으로 잠깐 언급되고, 이번 15장에 와서야 <code>present bit</code> · page fault와 연결되어 본격적으로 등장합니다.
+</Callout>
+
+
+## 전체 흐름 정리
+
+<FullFlowSteps caption="page fault 처리의 14단계 — 각 줄의 ②④⑤⑥ 마크가 위쪽 그림 단계와 1:1 대응된다." />
+
+<Callout kind="summary" title="한 줄 요약">
+Swapping은 <b>disk의 일부를 메모리처럼 쓰는 기법</b>이고, 이를 위해 PTE에 <b>present bit</b>를 두어 page가 메모리에 있는지 disk에 있는지 구분한다. <code>present = 0</code>인 page에 접근하면 <b>page fault</b>가 발생하고, OS는 그림의 ①~⑥ 단계를 거쳐 swap-in 후 instruction을 재실행한다.
+</Callout>

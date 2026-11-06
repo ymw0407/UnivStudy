@@ -1,0 +1,646 @@
+<Callout kind="summary" title="이 장의 목적">
+앞 장의 lock + condition variable + state variable 3 박자를 하나의 추상화로 묶은 도구가 <b>Semaphore</b>입니다. 초기값에 따라 <b>lock 처럼도</b>, <b>condition variable 처럼도</b> 쓸 수 있고, 같은 도구로 producer-consumer · reader-writer · dining philosophers 같은 고전 문제들을 풀 수 있습니다. 마지막엔 거꾸로 semaphore 를 lock+CV 로 구현해 보면서(<b>Zemaphore</b>) 두 추상화가 서로의 친척이라는 것까지 본다.
+</Callout>
+
+앞에서 우리는 동시성 문제를 해결하기 위해 **lock**과 **condition variable**을 배웠습니다.  
+
+> lock은 critical section에 한 번에 하나의 thread만 들어가게 해주고, 
+> condition variable은 어떤 조건이 만족될 때까지 thread를 재우고 깨우는 역할을 했습니다.
+
+그런데 이 두 개를 따로 사용하면 코드가 꽤 복잡해집니다.  
+
+예를 들어 condition variable을 쓰려면 보통 **state variable**, **condition variable**, **mutex lock**이 같이 필요했습니다.
+
+이번에 배우는 세마포어는 이 복잡한 구조를 하나의 추상화로 묶어서, 상황에 따라 **lock처럼도 쓰고**, **condition variable처럼도 쓸 수 있는 도구**입니다.
+
+앞에서 condition variable을 쓸 때를 떠올려 보면, 
+1. 어떤 thread가 조건을 기다리려면 lock을 잡고, 
+2. state variable을 검사하고, 
+3. 조건이 아니면 wait으로 잠들고,
+4. 다른 thread가 조건을 바꾸면 signal로 깨워야 했습니다.  
+즉, condition variable 하나만으로는 부족했고, 항상 lock과 state variable이 같이 필요했습니다.
+
+세마포어는 이걸 조금 다르게 봅니다.  
+세마포어 내부에는 **정수 값**이 있고, 이 값은 쉽게 말해 사용할 수 있는 **자원의 개수**를 의미합니다.
+
+- 자원이 1개인 경우: lock처럼 사용 가능
+- 자원이 0개에서 시작하는 경우: 어떤 사건이 일어날 때까지 기다리는 condition variable처럼 사용 가능
+
+```c
+#include <semaphore.h>
+sem_t s;
+sem_init(&s, 0, 1); // initialize s to the value 1
+// 첫 번째 인자 `&s`는 초기화할 세마포어입니다.  
+// 두 번째 인자 `0`은 이 세마포어가 **같은 프로세스 안의 thread들 사이에서 공유된다**는 뜻입니다.  
+	// 우리 수업에서는 대부분 thread 간 공유만 다루기 때문에 이 값을 0으로 둡니다.
+// 세 번째 인자 `1`은 세마포어의 초기 값입니다.  
+	// 이 값은 사용할 수 있는 자원의 개수를 의미합니다.  
+	//즉, `1`로 초기화했다는 것은 이 세마포어가 관리하는 자원이 처음에 하나 있다는 뜻입니다.
+```
+
+```c
+int sem_wait(sem_t *s) {
+    decrement the value of semaphore s by one;
+    wait if value of semaphore s is negative;
+}
+// **자원을 하나 가져가겠다**는 의미
+// 값을 감소시킨 뒤에도 세마포어 값이 0 이상이면, 
+	// 사용할 수 있는 자원이 있었다는 뜻이므로 thread는 그대로 실행
+// 감소시킨 결과가 음수가 되면, 
+	// 사용할 자원이 없는데 요청했다는 뜻이므로 해당 thread는 blocked state,
+	// 즉 잠자는 상태로 들어감
+int sem_post(sem_t *s) {
+    increment the value of semaphore s by one;
+    if there are one or more threads waiting, wake one;
+}
+// `sem_post()`는 **자원을 다 썼으니 반납하겠다**는 의미입니다.  
+// 그래서 세마포어 값을 1 증가시킵니다.
+// 만약 세마포어 값이 음수였다면, 
+	// 그 절댓값만큼 기다리는 thread가 있었다는 뜻입니다.  
+	// 따라서 `sem_post()`는 값을 증가시키는 것뿐만 아니라, 
+	// 기다리고 있는 thread 중 하나를 깨우는 역할도 합니다.
+```
+
+정리하면, `sem_wait()`는 자원 획득, `sem_post()`는 자원 반납입니다.  
+
+> 그리고 자원이 없으면 spin-wait하는 것이 아니라, thread를 sleep시켜 CPU를 낭비하지 않도록 합니다.
+
+<SemValueMeaning caption="세마포어 값의 부호가 곧 시스템 상태. 양수 = 남은 자원, 0 = 자원은 다 썼지만 대기 thread 는 없음, 음수 = 그 절댓값만큼 대기 thread 가 있음. sem_post 가 자원 반납 + 대기 thread 깨우기 두 역할을 동시에 한다." />
+
+| time | t1           | t2           | t3           | t4           | semaphore s |
+| ---- | ------------ | ------------ | ------------ | ------------ | ----------- |
+| 0    |              |              |              |              | 0           |
+| 1    | sem_wait(s); |              |              |              | -1          |
+| 2    |              | sem_wait(s); |              |              | -2          |
+| 3    |              |              | sem_wait(s); |              | -3          |
+| 4    |              |              |              | sem_post(s); | -2          |
+| 5    |              |              |              |              | ...         |
+
+-2라는 뜻은? -> semaphore를 기다리고 있는 thread 개수가 2개다.
+
+- -면 consumer들이 대기중 
+	- wait을 통해 소모
+- +면 producer들이 생성하는 중
+	- post를 통해 만들기
+
+- `s > 0`: 사용 가능한 자원이 있음
+- `s == 0`: 사용 가능한 자원이 없음
+- `s < 0`: 자원이 없고, 기다리는 thread가 있음
+- `|s|`: 기다리는 thread의 개수
+
+<SemTimeline4Threads caption="세마포어 값은 양수에서 시작해 wait 마다 1 씩 줄어든다. 0 미만이 되는 순간부터는 sleep 으로 들어가는 thread 수를 보여주는 카운터로 기능. post 한 번은 값을 +1 시키고 대기열에서 한 명 꺼낸다." />
+
+### binary semaphore
+
+이제 세마포어를 lock처럼 사용하는 방법을 봅니다.  
+
+> 이런 용도로 쓰는 세마포어를 **binary semaphore**라고 부릅니다.
+
+```c
+sem_t m;
+sem_init(&m, 0, X); // initialize semaphore to X; what should X be?
+// binary semaphore로 사용하려면 X를 1로 둬야함
+sem_wait(&m); // lock
+// critical section here
+sem_post(&m); // unlock
+```
+
+| Semaphore Value | Thread 0 동작            | 상태      | Thread 1 동작          | 상태       |
+| --------------: | ---------------------- | ------- | -------------------- | -------- |
+|               1 | -                      | Running | -                    | Ready    |
+|               1 | call `sem_wait()`      | Running | -                    | Ready    |
+|               0 | `sem_wait()` returns   | Running | -                    | Ready    |
+|               0 | critical section begin | Running | -                    | Ready    |
+|               0 | Interrupt; Switch → T1 | Ready   | -                    | Running  |
+|               0 | -                      | Ready   | call `sem_wait()`    | Running  |
+|              -1 | -                      | Ready   | decrement semaphore  | Running  |
+|              -1 | -                      | Ready   | `sem < 0` → sleep    | Sleeping |
+|              -1 | Switch → T0            | Running | -                    | Sleeping |
+|              -1 | critical section end   | Running | -                    | Sleeping |
+|              -1 | call `sem_post()`      | Running | -                    | Sleeping |
+|               0 | increment semaphore    | Running | -                    | Sleeping |
+|               0 | wake Thread 1          | Running | -                    | Ready    |
+|               0 | `sem_post()` returns   | Running | -                    | Ready    |
+|               0 | Interrupt; Switch → T1 | Ready   | -                    | Running  |
+|               0 | -                      | Ready   | `sem_wait()` returns | Running  |
+|               0 | -                      | Ready   | critical section     | Running  |
+|               0 | -                      | Ready   | call `sem_post()`    | Running  |
+|               1 | -                      | Ready   | `sem_post()` returns | Running  |
+|                 |                        |         |                      |          |
+
+<BinarySemaphoreAsLock caption="초기값 1 의 semaphore 가 mutex 와 똑같이 동작하는 18 단계 trace. T0 가 CS 안에 있는 동안 T1 은 sem_wait 에서 -1 → sleep, T0 의 sem_post 가 T1 을 Ready 로 깨워 그 다음 차례에 들어간다." />
+
+### Semaphores As Condition Variables
+
+앞에서 condition variable은 어떤 조건이 만족될 때까지 thread를 기다리게 하는 용도로 사용했습니다.  
+대표적인 예가 parent thread가 child thread가 끝날 때까지 기다리는 `join()` 형태였습니다.
+
+> 세마포어도 이런 **순서 강제(ordering)** 용도로 사용할 수 있습니다.
+
+예를 들어 parent는 child가 끝날 때까지 기다리고, child는 자신이 끝났다는 사실을 parent에게 알려야 합니다.  
+이때 parent는 `sem_wait()`으로 기다리고, child는 일이 끝난 뒤 `sem_post()`로 parent를 깨울 수 있습니다.
+
+즉, 세마포어를 condition variable처럼 쓴다는 것은 다음과 같습니다.
+
+- 기다리는 thread는 `sem_wait()`
+- 사건을 발생시키는 thread는 `sem_post()`
+- 세마포어 값으로 사건 발생 여부를 표현
+
+```c
+sem_t s;
+void *
+child(void *arg) {
+    printf("child\n");
+    sem_post(&s); // signal here: child is done
+    // post로 signal을 보내고
+    return NULL;
+}
+int
+main(int argc, char *argv[]) {
+    sem_init(&s, 0, X); // what should X be? -> 0으로 시작
+    // 초기값을 0으로 둔다는 것은 아직 발생한 사건이 없다는 뜻입니다.
+    // 
+    printf("parent: begin\n");
+    pthread_t c;
+    pthread_create(c, NULL, child, NULL);
+    sem_wait(&s); // wait here for child
+    // wait으로 슬립하다가 signal을 받으면 wakeup
+    // parent가 먼저 실행
+	    // `sem_wait()`을 호출하면 값이 -1이 되고 parent는 잠듭니다.
+    printf("parent: end\n");
+    return 0;
+}
+// parent: begin
+// child
+// parent: end
+```
+
+child는 `printf("child\n")`를 실행하고 `sem_post(&s)`를 호출합니다.  
+이때 기다리는 thread가 아직 없으므로 깨울 thread는 없습니다.  
+하지만 세마포어 값은 0에서 1이 됩니다.
+
+이후 parent가 다시 실행되어 `sem_wait(&s)`를 호출하면 값은 1에서 0이 됩니다.  
+값이 음수가 아니므로 parent는 잠들지 않고 바로 통과합니다.
+
+이게 중요한 이유는, condition variable만 잘못 사용하면 signal이 먼저 발생했을 때 signal이 사라져서 parent가 영원히 잠드는 문제가 생길 수 있기 때문입니다.  
+하지만 세마포어는 값이 1로 남아 있기 때문에, child가 먼저 끝나도 parent가 나중에 그 사실을 확인하고 통과할 수 있습니다.
+
+<SemAsCondVar caption="초기값 0 = 'child 끝났다' 라는 사건이 아직 없음. child 가 먼저 실행되면 post 가 값을 +1 로 만들어 두고, parent 가 늦게 wait 해도 그 1 을 소비하며 통과. 22 장의 CV 와 달리 signal 이 사라지지 않는 게 핵심." />
+
+### Producer / Consumer (Bounded-Buffer) Problem
+
+Producer/Consumer 문제는 bounded buffer를 사이에 두고 producer는 데이터를 넣고, consumer는 데이터를 꺼내는 문제입니다.
+
+Producer는 buffer가 비어 있거나 빈 공간이 있을 때 데이터를 넣을 수 있어야 합니다.  
+Consumer는 buffer에 데이터가 있을 때만 데이터를 꺼낼 수 있어야 합니다.
+
+```c
+int buffer[MAX];
+int fill = 0;
+// producer가 다음에 데이터를 넣을 위치
+int use = 0;
+// consumer가 다음에 데이터를 꺼낼 위치
+void put(int value) {
+    buffer[fill] = value;          // line f1
+    fill = (fill + 1) % MAX;       // line f2 -> 원형 큐
+}
+int get() {
+    int tmp = buffer[use];         // line g1
+    use = (use + 1) % MAX;         // line g2
+    return tmp;
+}
+```
+
+하지만 이 코드만으로는 thread-safe하지 않습니다.  
+
+> 여러 producer가 동시에 `put()`을 실행하면 같은 `fill` 위치에 데이터를 덮어쓸 수 있고
+> 여러 consumer가 동시에 `get()`을 실행하면 같은 데이터를 중복해서 읽을 수도 있습니다.
+
+```c
+sem_t empty;
+// producer를 깨우기 위한 semaphore -> condition variable 처럼 사용
+sem_t full;
+// consumer를 깨우기 위한 semaphore -> condition variable 처럼 사용
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        sem_wait(&empty);  // line P1
+        put(i);            // line P2
+        sem_post(&full);   // line P3
+    }
+}
+void *consumer(void *arg) {
+    int i, tmp = 0;
+    while (tmp != -1) {
+        sem_wait(&full);   // line C1
+        tmp = get();       // line C2
+        sem_post(&empty);  // line C3
+        printf("%d\n", tmp);
+    }
+}
+int main(int argc, char *argv[]) {
+    // ...
+    sem_init(&empty, 0, MAX); // MAX buffers are empty to begin with
+    sem_init(&full, 0, 0);    // and 0 are full
+    // ...
+}
+```
+
+> 여러 producer가 동시에 `put()`에 들어가면 `fill`을 동시에 건드릴 수 있음.  
+> 즉, **mutual exclusion이 빠져 있습니다.**
+
+| Time | P1 (producer)           | P2 (producer)           | 설명                                     |
+| ---: | ----------------------- | ----------------------- | -------------------------------------- |
+|    0 | `sem_wait(&empty);`     |                         | P1이 빈 버퍼 슬롯 하나를 확보                     |
+|    1 |                         | `sem_wait(&empty);`     | P2도 빈 버퍼 슬롯 하나를 확보                     |
+|    2 | `put(i);`               |                         | P1이 `put()` 진입                         |
+|    3 | `buffer[fill] = value;` |                         | P1이 현재 `fill` 위치에 값 저장                 |
+|    4 |                         | `put(i);`               | P2가 `put()` 진입                         |
+|    5 |                         | `buffer[fill] = value;` | P2도 같은 `fill` 위치에 값을 써서 P1 값을 덮어쓸 수 있음 |
+|    6 | `fill = fill + 1;`      |                         | P1이 `fill` 증가                          |
+|    7 |                         | `fill = fill + 1;`      | P2도 `fill` 증가                          |
+|   결과 |                         |                         | `put()` 내부가 보호되지 않아 race condition 발생  |
+
+```c
+cond_t empty, fill;
+mutex_t mutex;
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);              // p1
+        while (count == MAX)                     // p2
+            Pthread_cond_wait(&empty, &mutex);   // p3
+        put(i);                                  // p4
+        Pthread_cond_signal(&fill);              // p5
+        Pthread_mutex_unlock(&mutex);            // p6
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        Pthread_mutex_lock(&mutex);              // c1
+        while (count == 0)                       // c2
+            Pthread_cond_wait(&fill, &mutex);    // c3
+        int tmp = get();                         // c4
+        Pthread_cond_signal(&empty);             // c5
+        Pthread_mutex_unlock(&mutex);            // c6
+        printf("%d\n", tmp);
+    }
+}
+```
+
+```c
+sem_t empty;
+sem_t full;
+sem_t mutex;
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        sem_wait(&mutex);  // line p0 (NEW LINE)
+        sem_wait(&empty);  // line p1
+        put(i);            // line p2
+        sem_post(&full);   // line p3
+        sem_post(&mutex);  // line p4 (NEW LINE)
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        sem_wait(&mutex);  // line c0 (NEW LINE)
+        sem_wait(&full);   // line c1
+        int tmp = get();   // line c2
+        sem_post(&empty);  // line c3
+        sem_post(&mutex);  // line c4 (NEW LINE)
+        printf("%d\n", tmp);
+    }
+}
+```
+
+| Time | Producer 상태/동작    | Consumer <br/>상태/동작 | `mutex` | `empty` | `full` | 설명                                                   |
+| ---: | ----------------- | ------------------ | ------: | ------: | -----: | ---------------------------------------------------- |
+|    0 | sem_wait(&mutex); | -                  |       0 |       0 |      0 | Producer가 mutex를 먼저 잡음                               |
+|    1 | sem_wait(&empty); | -                  |       0 |      -1 |      0 | `empty`가 없어서 Producer가 sleep                         |
+|    2 | Sleeping          | sem_wait(&mutex);  |      -1 |      -1 |      0 | Consumer가 mutex를 얻으려 하지만 이미 Producer가 잡고 있음          |
+|    3 | Sleeping          | Sleeping           |      -1 |      -1 |      0 | Consumer도 mutex를 기다리며 sleep                          |
+|    4 | Sleeping          | Sleeping           |      -1 |      -1 |      0 | Producer는 `empty`를 기다리고, Consumer는 `mutex`를 기다림      |
+|   결과 | Deadlock          | Deadlock           |       - |       - |      - | Consumer가 실행되어야 `empty`를 증가시킬 수 있는데, mutex 때문에 실행 불가 |
+
+<PCDeadlockMutexFirst caption="mutex 를 empty/full 보다 먼저 잡으면 'mutex 를 든 채 잠드는' 상황이 생긴다. Producer 가 empty 를 기다리며 sleep 하면 mutex 가 풀리지 않아 Consumer 도 mutex 에서 막힌다 — 둘이 서로를 기다리는 deadlock." />
+
+> mutex는 shared buffer를 실제로 건드리는 put/get 구간만 보호한다.
+
+mutex를 잡고 sleep하는 일이 없게
+
+```c
+sem_t empty;
+sem_t full;
+sem_t mutex;
+void *producer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        sem_wait(&empty);  // line p1
+        sem_wait(&mutex);  // line p1.5 (MOVED MUTEX HERE...)
+        put(i);            // line p2
+        sem_post(&mutex);  // line p2.5 (... AND HERE)
+        sem_post(&full);   // line p3
+    }
+}
+void *consumer(void *arg) {
+    int i;
+    for (i = 0; i < loops; i++) {
+        sem_wait(&full);   // line c1
+        sem_wait(&mutex);  // line c1.5 (MOVED MUTEX HERE...)
+        int tmp = get();   // line c2
+        sem_post(&mutex);  // line c2.5 (... AND HERE)
+        sem_post(&empty);  // line c3
+        printf("%d\n", tmp);
+    }
+}
+int main(int argc, char *argv[]) {
+    // ...
+    sem_init(&empty, 0, MAX); // MAX buffers are empty to begin with
+    sem_init(&full, 0, 0);    // and 0 are full
+    sem_init(&mutex, 0, 1);   // mutex = 1 because it is a lock
+    // ...
+}
+```
+
+<ProducerConsumerSem caption="최종 정답 코드. empty / full 은 자원 수 세마포어, mutex 는 binary semaphore. mutex 는 put/get 만 감싸므로 'mutex 든 채로 sleep' 이 일어나지 않는다 — deadlock 회피의 정석." />
+
+### Reader-Writer Locks
+
+- write 
+	- insert처럼 자료구조의 상태를 바꾸는 작업입니다.
+	- shared resource를 수정하기 때문에 반드시 critical section으로 보호
+- read
+	- lookup처럼 자료구조를 읽기만 하는 작업입니다.  
+	- Read는 자료구조를 수정하지 않기 때문에, reader들끼리는 동시에 실행되어도 문제가 없음
+
+>  일반적인 lock을 사용하면 reader들도 한 번에 하나씩만 들어가야 해서 성능이 떨어짐
+
+Reader-Writer Lock은 이 문제를 해결하려고 합니다.
+핵심 규칙은 다음과 같습니다.
+
+- writer는 한 번에 하나만 들어갈 수 있음
+- writer가 실행 중일 때 reader는 들어갈 수 없음
+- reader만 있을 때는 여러 reader가 동시에 들어갈 수 있음
+- reader가 모두 끝나야 writer가 들어갈 수 있음
+
+즉, read가 많은 workload에서는 reader-writer lock이 일반 lock보다 더 높은 concurrency를 제공합니다.
+
+<RWLockStructure caption="reader-writer lock 은 두 개의 binary semaphore + readers count 로 이루어진다. 핵심 트릭은 '첫 번째 reader 만 writelock 을 잡고, 마지막 reader 가 푼다' — 그래야 reader 무리 전체가 writer 와 직렬화된다." />
+
+```c
+typedef struct _rwlock_t {
+    sem_t lock;       // binary semaphore (basic lock)
+    // `readers` 값을 보호하기 위한 binary semaphore
+    sem_t writelock;  // used to allow ONE writer or MANY readers
+    // writer를 막거나 통과시키는 핵심 lock
+    // Writer는 `writelock`을 잡아야 write할 수 있음
+    // Reader도 첫 번째 reader가 들어올 때 `writelock`을 잡아서 writer가 들어오지 못하게 막음
+    int readers;      // count of readers reading in critical section
+    // 현재 몇 명의 reader가 read critical section 안에 있는지 세는 변수
+} rwlock_t;
+void rwlock_init(rwlock_t *rw) {
+    rw->readers = 0;
+    sem_init(&rw->lock, 0, 1);
+    sem_init(&rw->writelock, 0, 1);
+    // 초기값은 둘 다 1입니다.  
+	// 둘 다 binary semaphore, 즉 lock처럼 쓰이기 때문입니다.
+}
+```
+
+```c
+void rwlock_acquire_readlock(rwlock_t *rw) {
+    sem_wait(&rw->lock); // reader lock
+    rw->readers++; // 현재 reader의 갯수를 하나 추가
+    if (rw->readers == 1) // 만약 내가 첫번째 reader였다 -> write 못하게 잠구기
+        sem_wait(&rw->writelock); // first reader acquires writelock
+    sem_post(&rw->lock);
+    // reader lock 해제 -> 여러 reader들이 reader 갯수 추가할때 race 안생기게
+}
+void rwlock_release_readlock(rwlock_t *rw) {
+    sem_wait(&rw->lock);
+    rw->readers--; // 일 끝나면 reader 하나 줄여야지
+    if (rw->readers == 0) // 만약 reader가 이제 없다 -> writer 깨우자
+        sem_post(&rw->writelock); // last reader releases writelock
+    sem_post(&rw->lock);
+}
+void rwlock_acquire_writelock(rwlock_t *rw) {
+    sem_wait(&rw->writelock); // reader가 없고, writer도 없으면 내가 잡아야지
+}
+void rwlock_release_writelock(rwlock_t *rw) {
+    sem_post(&rw->writelock); 
+    // 나 다 읽었으니 reader가 잡든 writer(다른 잠든)가 잡든 알아서 해
+}
+```
+
+### Reader-Writer Lock의 문제: Writer Starvation
+
+writer는 `writelock`을 기다리고 있는데, reader가 계속 추가되어 `readers` 값이 0이 되지 않을 수 있음
+
+마지막 reader가 나가야 writer가 들어갈 수 있는데, 새로운 reader가 계속 들어오면 writer는 계속 기다립니다.
+
+> -> Writer Starvation
+
+Reader-writer lock은 fairness 문제가 있습니다.  
+특히 reader가 계속 들어오면 writer가 굶을 수 있습니다.
+
+> writer가 기다리기 시작한 순간부터 새로운 reader가 더 이상 들어오지 못하게 막는 장치가 필요
+> Writer가 waiting 중인지 나타내는 추가 상태나, reader 진입을 막는 추가 semaphore가 필요할 수 있음
+
+이 문제는 deadlock은 아니지만 starvation입니다.  
+Deadlock은 모두가 서로 기다리며 멈추는 상태이고, starvation은 특정 thread가 계속 실행 기회를 얻지 못하는 상태입니다.
+
+<WriterStarvation caption="R1, R2, R3 … 가 끊임없이 read 를 시작하면 readers 가 0 으로 떨어지지 않는다. writer 는 writelock 을 영영 못 잡아 starve. deadlock(서로 멈춤) 이 아니라 starvation(특정 thread 만 진행 못함) — fairness 정책이 필요한 이유." />
+
+Reader-writer lock에서는 다음 세 가지를 균형 있게 고려
+
+- reader concurrency
+- writer progress
+- fairness
+
+### Dining Philosophers 문제
+
+유명한 동시성 문제인 **Dining Philosophers**, 즉 식사하는 철학자 문제
+
+다섯 명의 철학자가 원탁에 앉아 있다고 가정합니다.  
+철학자 사이사이에는 포크가 하나씩 있고, 총 다섯 개의 포크가 있습니다.
+
+각 철학자는 생각할 때는 포크가 필요 없고, 밥을 먹을 때는 왼쪽 포크와 오른쪽 포크, 총 두 개의 포크가 필요
+
+```c
+while (1) {
+    think(); // 생각하고
+    getforks(); // 포크를 들고
+    eat(); // 먹고
+    putforks(); // 포크를 내려놓고
+}
+```
+
+이 문제의 핵심은 여러 철학자가 동시에 포크를 집으려고 할 때 발생하는 경쟁입니다.
+
+각 포크는 한 번에 한 철학자만 사용할 수 있습니다.  
+따라서 포크는 semaphore로 표현할 수 있습니다.
+
+> 이 문제는 단순히 mutual exclusion만 필요한 문제가 아닙니다.  
+> Deadlock과 starvation을 모두 고려해야 합니다.
+
+첫 번째, deadlock이 없어야 합니다.  
+모든 철학자가 포크를 하나씩 들고 서로 기다리면서 멈추면 안 됩니다.
+
+두 번째, starvation이 없어야 합니다.  
+어떤 철학자가 계속 밥을 못 먹는 상황이 생기면 안 됩니다.
+
+세 번째, concurrency가 높아야 합니다.  
+가능한 경우에는 여러 철학자가 동시에 밥을 먹을 수 있어야 합니다.  
+예를 들어 서로 포크를 공유하지 않는 철학자들은 동시에 먹을 수 있어야 합니다.
+
+```c
+while (1) {
+    think();
+    getforks();
+    eat();
+    putforks();
+}
+// helper functions
+int left(int p) {
+    return p;
+}
+int right(int p) {
+    return (p + 1) % 5;
+}
+```
+
+```c
+void getforks() {
+    sem_wait(forks[left(p)]);
+    sem_wait(forks[right(p)]);
+}
+void putforks() {
+    sem_post(forks[left(p)]);
+    sem_post(forks[right(p)]);
+}
+```
+
+deadlock이 발생할 수 있음
+
+모든 철학자가 동시에 왼쪽 포크를 집었다고 가정합니다.  
+그러면 각 철학자는 왼쪽 포크 하나씩을 들고 있습니다.
+
+이제 모두 오른쪽 포크를 집으려고 합니다.  
+그런데 각자의 오른쪽 포크는 이미 옆 철학자가 왼쪽 포크로 들고 있습니다.
+
+결국 모든 철학자가 포크 하나를 든 채로, 다른 포크가 내려오기를 기다립니다.  
+하지만 아무도 자신이 들고 있는 포크를 내려놓지 않습니다
+
+> 이것이 circular wait이고, deadlock입니다.
+
+### Dependency를 깨는 해결책
+
+```c
+void getforks() {
+    if (p == 4) {
+        sem_wait(forks[right(p)]);
+        sem_wait(forks[left(p)]);
+    } else {
+        sem_wait(forks[left(p)]);
+        sem_wait(forks[right(p)]);
+    }
+}
+```
+
+모든 철학자가 같은 순서로 포크를 집으면 cycle이 생깁니다.  
+따라서 한 명만 다른 순서로 포크를 집게 하면 circular wait을 깰 수 있습니다.
+
+이렇게 하면 모든 철학자가 동시에 왼쪽 포크를 하나씩 집는 상황이 만들어지지 않습니다.  
+> 즉, waiting cycle이 깨집니다.
+
+앞에서 deadlock을 막으려면 네 조건 중 하나만 깨면 된다고 했습니다.  
+여기서는 lock 획득 순서를 일부 다르게 만들어 circular dependency가 생기지 않게 한 것입니다.
+
+이 아이디어는 reader-writer lock의 fairness 문제와도 연결됩니다.  
+어떤 thread들이 계속 같은 방식으로 자원을 요청하면 특정 thread가 막힐 수 있으므로, 자원 획득 순서나 진입 조건을 조정해서 dependency를 깨는 방식으로 문제를 완화할 수 있습니다.
+
+<DiningPhilosophers caption="왼쪽: 모두 같은 순서(왼쪽 → 오른쪽) 로 잡으면 circular wait 의 cycle 이 완성된다. 오른쪽: P4 한 명만 반대 순서(오른쪽 → 왼쪽) 로 잡게 하면 cycle 이 끊겨 deadlock 이 사라진다." />
+
+### Zemaphore
+
+마지막으로 세마포어 자체를 condition variable과 lock으로 구현하는 예제를 봅니다.  
+이 구현을 강의에서는 **Zemaphore**라고 부릅니다.
+
+```c
+typedef struct __Zem_t {
+    int value; // 세마포어 값
+    pthread_cond_t cond; // condition variable
+    pthread_mutex_t lock; // mutex
+} Zem_t;
+// only one thread can call this
+void Zem_init(Zem_t *s, int value) {
+    s->value = value; // 초기화 세마포어에서 맨뒤에 인자
+    Cond_init(&s->cond); // condition variable
+    Mutex_init(&s->lock); // mutex 
+}
+void Zem_wait(Zem_t *s) {
+    Mutex_lock(&s->lock); // 락걸고
+	
+    while (s->value <= 0) // 만약 0보다 작으면
+        Cond_wait(&s->cond, &s->lock); // sleep
+        // 기다리는 thread들은 condition variable의 wait queue에 들어감
+        // 1. 현재 thread를 condition variable wait queue에 넣음  
+		// 2. s->lock을 풀고 잠듦  
+		// 3. 나중에 signal을 받아 깨어남  
+		// 4. return하기 전에 s->lock을 다시 잡음
+    s->value--; // 그리고 세마포어 값 하나 줄이기
+    // semaphore는 wait에서 값을 1 감소시키고, 값이 0보다 작으면 blocked state로 감
+    // 근데 zemaphore는 살짝 다름
+    // 이 구현에서는 `value`가 음수가 되지 않음
+    Mutex_unlock(&s->lock); // 락풀기
+}
+void Zem_post(Zem_t *s) {
+    Mutex_lock(&s->lock); // lock 걸고 
+    s->value++; // 세마포어에 값을 늘리고
+    Cond_signal(&s->cond);
+    // 시그널 보내서 깨움
+    // codition variable queue에 들어가있던거 하나 깨움
+    // 아래에서 락풀고 나면 그때 잡아가겠지...
+    Mutex_unlock(&s->lock); // 락 풀고
+}
+```
+
+여기서 `value`는 세마포어의 값입니다.  
+`cond`는 기다리는 thread를 재우고 깨우기 위한 condition variable입니다.  
+`lock`은 `value`와 condition variable 사용을 보호하기 위한 mutex입니다.
+
+이 구조를 보면 앞에서 배운 내용이 연결됩니다.  
+세마포어는 lock과 condition variable을 대체할 수 있다고 했습니다.  
+그런데 반대로, 세마포어도 내부적으로는 lock과 condition variable을 이용해서 구현할 수 있습니다.
+
+즉, 두 추상화는 서로 완전히 동떨어진 개념이 아니라, 서로를 이용해 구현할 수 있는 동시성 도구입니다.
+
+<ZemaphoreImpl caption="Zem_wait 은 'while + Cond_wait + value--' 패턴, Zem_post 는 'value++ + Cond_signal'. 22 장의 CV 패턴 그대로다. 두 추상화는 서로를 만들 수 있는 친척 — 어느 한 쪽이 본질적으로 강한 것이 아니다." />
+
+```
+앞부분의 semaphore 개념:
+value-- 먼저 하고, value < 0이면 sleep.
+음수 value는 기다리는 thread 수를 나타냄.
+
+Zemaphore 구현:
+value가 0 이하이면 Cond_wait로 sleep.
+이때 Cond_wait가 mutex를 풀고 잠듦.
+깨어난 뒤 mutex를 다시 잡고, value가 양수이면 그때 value--.
+따라서 value는 절대 음수가 되지 않음.
+기다리는 thread들은 value가 아니라 condition variable queue에 들어감.
+```
+
+
+## 한 줄 요약
+
+<Callout kind="summary" title="Semaphore 한눈에">
+• 세마포어 = <b>정수 값 + 대기 큐</b>. <code>sem_wait</code> = "자원 하나 가져가기" (값 −−, 음수면 sleep). <code>sem_post</code> = "자원 반납" (값 ++, 대기 thread 있으면 하나 깨움).<br/>
+• <b>binary semaphore (init=1)</b> = mutex 처럼. <b>signaling semaphore (init=0)</b> = CV 처럼 (join 패턴).<br/>
+• Producer/Consumer = <b>empty (init=MAX) + full (init=0) + mutex (init=1)</b>. mutex 는 항상 <b>empty/full 안쪽</b> 에서 잡아야 deadlock 없음.<br/>
+• Reader-Writer Lock — 첫 reader 가 writelock 잡고 마지막 reader 가 푼다. 단, <b>Writer Starvation</b> 가능.<br/>
+• Dining Philosophers — 모두 같은 순서로 잡으면 circular deadlock. 한 명만 반대로 잡게 하면 cycle 깨짐.<br/>
+• <b>Zemaphore</b> — semaphore 는 lock + CV 로 구현 가능. 두 추상화는 서로의 친척.
+</Callout>

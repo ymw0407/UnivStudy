@@ -1,0 +1,554 @@
+<Callout kind="summary" title="이 장의 목적">
+앞 장에서 <i>lock 그 자체</i> 를 봤다면, 이번 장은 그 lock 을 가지고 <b>자료구조를 thread-safe 하게 만드는 패턴</b> 을 다룹니다. counter / linked list / queue / hash table 네 가지를 차례로 보면서, <b>왜 단일 lock 이 병목인가</b> → <b>어떻게 fine-grained 로 쪼개는가</b> → <b>각 쪼갬에 어떤 비용이 따라오는가</b> 를 한 줄기로 따라갑니다.
+</Callout>
+
+자료구조에 락을 추가하면 thread-safe하게 만들 수 있다. 하지만 락을 하나만 크게 걸면 correctness는 쉽게 만족할 수 있어도 성능이 나빠질 수 있다.
+
+서로 다른 변수나 서로 독립적인 부분은 서로 다른 락으로 보호해야 concurrency가 증가한다. fine-grained locking
+
+```c
+typedef struct __counter_t {
+	int value;
+	pthread_lock_t lock;
+} counter_t;
+
+void init(counter_t *c) {
+	c->value = 0;
+	Pthread_mutex_init(&c->lock, NULL);
+}
+
+void increment(counter_t *c) {
+	Pthread_mutex_lock(&c->lock);
+	c->value++;
+	Pthread_mutex_unlock(&c->lock);
+}
+
+void decrement(counter_t *c) {
+	Pthread_mutex_lock(&c->lock);
+	c->value--;
+	Pthread_mutex_unlock(&c->lock);
+}
+
+int get(counter_t *c) {
+	Pthread_mutex_lock(&c->lock);
+	int rc = c->value;
+	Pthread_mutex_unlock(&c->lock);
+	return rc;
+}
+```
+
+이렇게 하면 한 번에 하나의 thread만 `value`를 수정할 수 있으므로 mutual exclusion은 만족한다.
+즉, correctness 관점에서는 안전해진다.
+
+하지만 여기서부터 성능 문제가 시작된다.
+
+모든 thread가 같은 `value` 하나를 공유하고, 같은 lock 하나를 잡으려고 경쟁하기 때문이다.
+
+<CounterContention caption="모든 thread 가 같은 counter+lock 에 몰린다. 한 명만 lock 보유자, 나머지는 모두 대기 (blocked 또는 spin) — thread 수가 늘수록 대기 시간만 늘어난다." />
+
+각 thread가 하나의 shared counter를 100만 번씩 업데이트한다고 하자. CPU가 4개라면 thread가 늘어날수록 성능이 좋아질 것 같지만, 실제로는 오히려 나빠질 수 있다.
+
+이유는 모든 thread가 같은 lock과 같은 `value`에 접근하기 때문이다.
+
+한 thread가 lock을 잡고 있으면 다른 thread는 기다려야 한다.
+
+기다리는 thread는 blocked 상태가 되거나, lock 구현에 따라 spin하면서 CPU를 낭비할 수 있다. 또한 thread가 많아질수록 lock 경쟁과 context switching overhead가 누적된다.
+
+즉, 병목은 계산 자체가 아니라 하나의 shared counter를 모두가 동시에 건드리려는 구조에서 발생한다.
+
+<PerfectVsActualScaling caption="이상적으로는 thread 수에 비례해 throughput 이 늘어야 하지만 (초록 점선), 실제 single-lock counter 는 thread 가 늘수록 contention 만 커져 오히려 throughput 이 떨어진다 (빨강). lock 이 직렬화 지점이 되기 때문." />
+
+### Perfect Scaling
+
+이상적으로는 thread나 CPU 수가 늘어나면 처리량도 그만큼 늘어나야 한다.
+
+이를 perfect scaling이라고 한다.
+
+하지만 단일 lock counter에서는 그렇게 되지 않는다. 오히려 thread가 늘수록 lock contention이 커져 실행 시간이 증가할 수 있다.
+
+thread를 많이 만든다고 자동으로 빨라지는 것이 아니다. shared resource를 어떻게 나누고, lock을 어떻게 설계하느냐가 중요하다
+
+
+## Approximate Counter
+
+아이디어는 하나의 logical counter를 여러 개의 local counter로 나누는 것
+
+기존 방식은 모든 thread가 하나의 global counter를 직접 증가시켰다. 하지만 approximate counter에서는 CPU core마다 local counter를 하나씩 둔다
+
+<ApproximateCounterArch caption="CPU 마다 local counter + local lock. thread 는 자기 CPU 의 local 만 증가시키므로 글로벌 락 경쟁이 사라진다. local 이 임계치(S) 에 도달했을 때만 한 번 글로벌에 합산하고 local 을 0 으로 리셋." />
+
+1. thread가 counter를 증가시키고 싶을 때 global counter를 바로 건드리지 않는다. 대신 자신이 실행 중인 core의 local counter를 증가시킨다.
+2. local counter는 core별로 분리되어 있으므로 여러 thread가 동시에 global counter 하나에 몰리는 상황을 줄일 수 있다.
+3. 그러다가 local counter 값이 어느 정도 쌓이면, 그때 global counter에 한 번에 반영한다.
+
+```
+1. local counter 증가  
+2. local counter가 threshold에 도달했는지 확인  
+3. 도달했다면 global lock 획득  
+4. global counter += local counter  
+5. local counter = 0  
+6. global lock 해제
+```
+
+* S가 작으면
+   * 장점
+      * local counter가 자주 global counter에 반영된다.
+      * 그러면 global counter 값은 actual count와 거의 비슷해진다.
+   * 단점
+      * 자주 반영한다는 것은 global lock을 자주 잡는다는 뜻이다.
+      * 따라서 성능은 나빠질 수 있다.
+* S가 크면
+   * 장점
+      * local counter가 많이 쌓인 뒤에야 global counter에 반영된다.
+      * 그러면 global lock을 덜 잡으므로 성능은 좋아진다.
+   * 단점
+      * global counter 값이 실제 전체 count보다 늦게 반영된다.
+      * 즉, 정확도는 떨어질 수 있다.
+
+S 작음 → 정확도 높음, 성능 낮음 S 큼 → 정확도 낮음, 성능 높음
+
+<ThresholdTradeoff caption="threshold S 는 한 끝에 'accurate-and-slow', 다른 끝에 'approximate-but-fast' 가 놓이는 슬라이더. 워크로드 요구(실시간 정확도가 얼마나 필요한가)에 따라 어느 쪽으로 치우칠지 결정한다." />
+
+<ApproximateCounterExample caption="threshold S=5 인 경우의 진행. CPU 0/1 이 각자 local 만 만지다가 5 에 도달하면 그제서야 글로벌에 합산하고 local 을 0 으로. 사이 구간에는 글로벌 락 경쟁이 없다." />
+
+"threshold를 높이면 성능이 좋아지는데, 단점은 무엇인가?"
+
+답은 global counter와 actual count의 차이가 커진다는 것이다. 즉, 실제로 thread들이 많이 카운팅했더라도 global counter에는 늦게 반영된다.
+
+이것을 response time이 늦어진다고 이해해도 된다. 카운팅 결과가 즉시 반영되지 않고 local counter에 잠시 머물기 때문이다.
+
+따라서 approximate counter는 정확도가 조금 늦게 반영되어도 괜찮은 상황에서 유용하다.
+
+```c
+typedef struct __counter_t {
+	int global; // global counter
+	pthread_mutex_t glock; // global lock
+	  
+	int local[NUMCPUS]; // local counter
+	pthread_mutex_t llock[NUMCPUS]; 
+	// local lock이 필요한가...?
+	// 그 CPU에서 도는 thread들끼리 공유하는 값 -> 즉 한 CPU에서도 여러 thread들이 선점하며 사용
+	int threshold;
+} counter_t;
+
+void init(counter_t *c, int threshold) {
+	c->threshold = threshold;
+	
+	g->global = 0;
+	pthread_mutex_init(&c->glock, NULL);
+	
+	int i;
+	for (int i=0; i<NUMCPUS; i++) {
+		c->local[i] = 0;
+		pthread_mutex_init(&c->llock[i], NULL);
+	}
+}
+
+void update(counter_t *c, int threadID, int amt) {
+	pthread_mutex_lock(&c->llock[threadID]); // 로컬락을 먼저 걸고
+	c->local[threadID] += amt; // 추가할 amount
+	
+	if (c->local[threadID] >= c->threshold) { // threashold과 같거나 넘기면
+	    pthread_mutex_lock(&c->glock); // 글로벌 락을 걸고
+	    c->global += c->local[cpu]; // 글로벌에 반영 후
+	    pthread_mutex_unlock(&c->glock); // 글로벌 락을 해제
+	
+	    c->local[threadID] = 0;
+	}
+	
+	pthread_mutex_unlock(&c->llock[threadID]);
+}
+
+int get(counter_t *c) {
+// 다만 local counter에 아직 반영되지 않은 값은 포함하지 않으므로 반환값은 approximate value다.
+	pthread_mutex_lock(&c->glock); // 글로벌 락을 걸고
+	int val = c->global;
+	pthread_mutex_unlock(&c->glock); // 글로벌 락을 해제
+	return val;
+}
+```
+
+이 코드의 threadID는 "현재 thread가 사용할 local counter 번호"이고, 실제 CPU 번호를 쓰지 않아도 counter를 분산시키는 효과를 얻기 위해 사용한 것이다.
+
+
+## Concurrent Linked Lists
+
+linked list는 각 node가 `next` pointer로 연결된 구조다.
+
+여러 thread가 동시에 insert, lookup, delete를 수행하면 race condition이 발생할 수 있다.
+
+### Simple way
+
+가장 단순한 방법은 list 전체에 하나의 lock을 거는 것이다. thread가 linked list에 접근하려고 할 때마다 list lock을 잡고 들어간다.
+
+이 방식은 correctness는 보장하지만, list 전체가 하나의 critical section처럼 동작한다는 한계가 있다.
+
+<ListSingleLockBottleneck caption="list 전체에 하나의 lock 을 걸면 lookup 으로 끝까지 훑는 동안 다른 thread 가 무관한 위치를 만지고 싶어도 모두 대기. correctness 는 쉽지만 concurrency 가 0 에 가깝다." />
+
+```c
+typedef struct __node_t {
+	int key;
+	struct __node_t *next;
+} node_t;
+
+typedef struct __list_t {
+	node_t *head;
+	pthread_mutex_t lock; // lock!!
+} list_t;
+
+void List_Init(list_t *L) {
+	L->head = NULL;
+	pthread_mutex_init(&L->lock, NULL);
+}
+
+int List_Insert(list_t *L, int key) {
+    pthread_mutex_lock(&L->lock);
+
+    node_t *new = malloc(sizeof(node_t));
+    if (new == NULL) {
+        perror("malloc"); // stderr로 오류 출력
+        pthread_mutex_unlock(&L->lock);
+        return -1; // fail
+    }
+
+    new->key = key;
+    // ------- critical section -------
+    new->next = L->head;
+    L->head = new;
+    // ------- critical section -------
+
+    pthread_mutex_unlock(&L->lock);
+    return 0; // success
+}
+
+int List_Lookup(list_t *L, int key) {
+    pthread_mutex_lock(&L->lock);
+
+    node_t *curr = L->head;
+    while (curr) {
+        if (curr->key == key) {
+            pthread_mutex_unlock(&L->lock);
+            return 0; // success
+        }
+        curr = curr->next;
+    }
+
+    pthread_mutex_unlock(&L->lock);
+    return -1; // failure
+}
+```
+
+1. 예외 처리에서 unlock을 빼먹기 쉽다.
+   * 예를 들어 `malloc()`이 실패했는데 unlock하지 않고 return하면, lock이 영원히 잡힌 상태가 된다.
+   * 그러면 다른 thread는 이 list에 접근할 수 없고 프로그램은 deadlock 상태에 빠질 수 있다.
+2. lookup에서 list가 길면 while loop를 오래 돈다.
+   * 그동안 lock을 계속 잡고 있으므로 다른 thread는 insert도 lookup도 못 한다.
+
+따라서 단순히 함수 전체를 lock으로 감싸는 방식은 correctness는 쉽지만 성능과 코드 안전성 측면에서 좋지 않다.
+
+```c
+void List_Init(list_t *L) {
+    L->head = NULL;
+    pthread_mutex_init(&L->lock, NULL);
+}
+
+void List_Insert(list_t *L, int key) {
+    // synchronization not needed
+    node_t *new = malloc(sizeof(node_t));
+    if (new == NULL) {
+        perror("malloc"); // stderr로 오류 출력
+        return;
+    }
+
+    new->key = key;
+
+    // just lock critical section
+    pthread_mutex_lock(&L->lock);
+    new->next = L->head;
+    L->head = new;
+    pthread_mutex_unlock(&L->lock);
+}
+
+int List_Lookup(list_t *L, int key) {
+    int rv = -1;
+
+    pthread_mutex_lock(&L->lock);
+
+    node_t *curr = L->head;
+    while (curr) {
+        if (curr->key == key) {
+            rv = 0;
+            break;
+        }
+        curr = curr->next;
+    }
+
+    pthread_mutex_unlock(&L->lock);
+
+    return rv; // now both success and failure
+}
+```
+
+<Callout kind="tip" title="개선 포인트 — critical section 을 좁히고, 하나의 return 으로 모으기">
+위 두 번째 코드의 핵심 차이 두 가지입니다.<br/>
+• <b><code>malloc</code> 은 lock 밖으로</b> 빼냈습니다. 새 노드를 잡는 것 자체는 공유 자료구조와 무관하니 굳이 lock 안에서 할 필요가 없죠 — critical section 이 짧을수록 다른 thread 가 기다리는 시간이 줄어듭니다.<br/>
+• <b>return 을 함수 끝 한 곳으로 모았습니다.</b> 위쪽 코드처럼 lookup 안에서 일찍 return 하면 그 경로마다 unlock 을 빼먹을 위험이 생기는데, 결과를 <code>rv</code> 에 담고 끝에서 한 번 return 하면 unlock 이 항상 실행됩니다.
+</Callout>
+
+### Scaling Linked List
+
+linked list의 근본적인 문제는 탐색이다. 원하는 값을 찾으려면 head부터 시작해서 node를 하나씩 따라가야 한다.
+
+list가 길수록 lock을 오래 잡게 되고, 다른 thread들은 더 오래 기다린다.
+
+결국 lock 대기 시간과 context switching overhead가 증가한다.
+
+이를 완화하기 위해 hand-over-hand locking, 또는 lock coupling이 등장한다.
+
+아이디어는 list 전체에 하나의 lock을 거는 대신 node마다 lock을 두는 것이다. 탐색할 때는 다음 node의 lock을 먼저 잡고, 현재 node의 lock을 푼다.
+
+이름 그대로 손을 하나씩 옮겨가며 사다리를 타듯이 이동하는 방식이다.
+
+<HandOverHandLocking caption="thread T 가 B 에 있을 땐 B 의 lock 만 들고 있고, 다음 C 로 이동할 때는 'C 의 lock 을 먼저 잡고 → 그 다음 B 의 lock 을 푼다'. 항상 두 lock 을 잠깐 겹쳐 들고 한 칸씩 옮겨간다." />
+
+```c
+int List_Lookup(list_t *L, int key) {
+    node_t *curr = L->head;
+
+    while (curr) {
+        pthread_mutex_lock(&L->lock);
+
+        if (curr->key == key) {
+            pthread_mutex_unlock(&L->lock);
+            return 0; // success
+        }
+
+        curr = curr->next;
+
+        pthread_mutex_unlock(&L->lock);
+    }
+
+    return -1; // failure
+}
+```
+
+hand-over-hand locking은 전체 list를 오래 잠그지 않기 때문에 concurrency를 높일 수 있다.
+
+예를 들어 A node에서 B node로 이동할 때, B의 lock을 잡은 뒤 A의 lock을 푼다. 그러면 현재 이동 중인 구간은 보호하면서도 list 전체를 막지는 않는다.
+
+이 방식이 본질적인 해결책은 아니다
+
+```
+1. node마다 lock/unlock을 반복하므로 오버헤드가 크다.
+2. 코드가 복잡해진다.
+3. lock 순서가 꼬이면 deadlock 가능성이 생긴다.
+4. linked list 자체가 순차 탐색 구조라 탐색 비용이 크다.
+```
+
+Hand-over-hand locking은 linked list의 각 노드마다 lock을 두고, 다음 노드의 lock을 먼저 잡은 뒤 현재 노드의 lock을 해제하면서 이동하는 방식이다.
+
+장점은 리스트 전체를 잠그지 않아도 되므로 서로 다른 위치를 접근하는 thread들이 동시에 실행될 수 있고, insert/delete 중 리스트 구조를 안전하게 보호할 수 있다는 점이다.
+
+단점은 노드를 이동할 때마다 lock/unlock을 반복해야 하므로 오버헤드가 크고, 구현이 복잡하며, lock 순서를 잘못 관리하면 deadlock이 발생할 수 있다는 점이다.
+
+따라서 coarse-grained lock보다 동시성은 높일 수 있지만, 실제로는 lock 비용 때문에 항상 더 빠르지는 않다.
+
+
+## Michael and Scott Concurrent Queues
+
+queue는 linked list보다 fine-grained locking을 적용하기 쉽다. 왜냐하면 queue는 enqueue와 dequeue가 서로 다른 끝에서 일어나기 때문이다.
+
+enqueue는 tail 쪽에서 수행되고, dequeue는 head 쪽에서 수행된다.
+
+그래서 lock을 두 개로 나눌 수 있다.
+
+```
+headLock - dequeue 보호
+tailLock - enqueue 보호
+```
+
+이렇게 하면 enqueue와 dequeue가 동시에 진행될 수 있다.
+
+다만 queue에 node가 하나밖에 없거나 비어 있는 상태에서는 head와 tail이 같은 node를 가리킬 수 있다. 이때 두 lock이 같은 node를 서로 다른 방식으로 보호하게 되면 race condition이 생길 수 있다.
+
+이를 해결하기 위해 dummy node를 둔다.
+
+<MichaelScottQueueLayout caption="head 쪽에 headLock, tail 쪽에 tailLock 을 따로 둔다. dummy node 가 항상 head 자리에 있기 때문에 enqueue 와 dequeue 가 서로 다른 노드를 만지게 되고, 두 lock 이 충돌하지 않는다 → 동시 진행 가능." />
+
+```c
+typedef struct __node_t {
+    int value;
+    struct __node_t *next;
+} node_t;
+
+typedef struct __queue_t {
+    node_t *head;
+    node_t *tail;
+    pthread_mutex_t headLock;
+    pthread_mutex_t tailLock;
+} queue_t;
+
+void Queue_Init(queue_t *q) {
+    node_t *tmp = malloc(sizeof(node_t));
+    tmp->next = NULL; // dummy node를 넣음
+
+    q->head = q->tail = tmp; // head와 tail이 dummy node를 가리킴
+
+    pthread_mutex_init(&q->headLock, NULL);
+    pthread_mutex_init(&q->tailLock, NULL);
+}
+
+void Queue_Enqueue(queue_t *q, int value) {
+    node_t *tmp = malloc(sizeof(node_t));
+    assert(tmp != NULL);
+
+    tmp->value = value;
+    tmp->next = NULL;
+
+    pthread_mutex_lock(&q->tailLock);
+
+    q->tail->next = tmp; // 1
+    q->tail = tmp; // 2
+
+    pthread_mutex_unlock(&q->tailLock);
+}
+
+int Queue_Dequeue(queue_t *q, int *value) {
+    pthread_mutex_lock(&q->headLock);
+
+    node_t *tmp = q->head; // 더미노드를 가져오고
+    node_t *newHead = tmp->next; 
+    // 더미노드의 다음을 새로운 헤드로 -> 즉 새로운 더미노드가 그 다음 노드가 됨
+
+    if (newHead == NULL) {
+        pthread_mutex_unlock(&q->headLock);
+        return -1; // queue was empty
+    }
+
+    *value = newHead->value;
+    q->head = newHead;
+
+    pthread_mutex_unlock(&q->headLock);
+
+    free(tmp);
+    return 0;
+}
+```
+
+<QueueDequeueDummyShift caption="Dequeue 의 트릭: '값을 꺼낼 노드(n1)' 자체를 삭제하는 게 아니라, 그 노드의 value 만 반환한 뒤 n1 을 새 dummy 로 승격시키고 옛 dummy 를 free 한다. 이렇게 해야 head 와 tail 이 가리키는 동일 노드 위에서 두 lock 이 충돌하지 않는다." />
+
+```
+dummy -> new1 -> new2
+dequeue 후:dummy 역할이 new1로 이동
+new1(dummy) -> new2기존 dummy는 free
+```
+
+```
+dequeue는 newHead 노드를 삭제하는 게 아니다.
+newHead의 value만 꺼내고,newHead를 새로운 dummy node로 만든다.
+기존 dummy node를 free한다.
+```
+
+
+## Concurrent Hash Table
+
+linked list는 탐색이 길어질수록 병목이 심해진다. 이를 완화하기 위해 hash table을 사용한다.
+
+hash table의 핵심 아이디어는 key를 여러 bucket 중 하나로 분산시키는 것이다.
+
+전체 hash table에 하나의 lock만 두면 또 병목이 생긴다. 따라서 bucket마다 lock을 둔다.
+
+```
+bucket 0 - lock 0bucket 1 - lock 1bucket 2 - lock 2...
+```
+
+서로 다른 bucket에 접근하는 thread들은 동시에 실행될 수 있다. 이것이 fine-grained locking이다.
+
+<ConcurrentHashTable caption="bucket 마다 자기 lock + 자기 linked list. 서로 다른 bucket 을 만지는 thread (T1·T2) 는 동시에 진행, 같은 bucket 을 만지는 thread (T1·T3) 만 그 bucket 의 lock 에서 대기. 분산만 잘 되면 contention 이 자연스럽게 흩어진다." />
+
+각 bucket은 concurrent linked list로 구현된다.
+
+즉, hash table은 linked list 여러 개를 배열로 가지고 있는 구조다.
+
+key가 들어오면 hash function을 통해 bucket 번호를 계산한다. 그리고 해당 bucket의 linked list에 insert하거나 lookup한다.
+
+```c
+#define BUCKETS (101)
+
+typedef struct __hash_t {
+    list_t lists[BUCKETS];
+} hash_t;
+
+void Hash_Init(hash_t *H) {
+    int i;
+
+    for (i = 0; i < BUCKETS; i++) {
+        List_Init(&H->lists[i]);
+    }
+}
+
+int Hash_Insert(hash_t *H, int key) {
+    int bucket = key % BUCKETS;
+    return List_Insert(&H->lists[bucket], key);
+}
+
+int Hash_Lookup(hash_t *H, int key) {
+    int bucket = key % BUCKETS;
+    return List_Lookup(&H->lists[bucket], key);
+}
+```
+
+hash table을 적용하면 linked list 하나에 모든 key가 몰리는 것이 아니라 여러 bucket으로 분산된다.
+
+따라서 서로 다른 bucket에 접근하는 thread들은 서로 기다리지 않아도 된다.
+
+모든 key가 같은 bucket으로 몰리면 성능 개선이 거의 없다. 그래서 hash function이 중요하다.
+
+좋은 hash function은 key를 bucket에 균등하게 분산시킨다. 그럴수록 lock contention이 줄어들고, 성능이 잘 확장된다.
+
+<HashFunctionDistribution caption="같은 bucket 개수라도 hash function 이 나쁘면 한 bucket 에 몰려 single-lock counter 와 같은 병목이 된다. 좋은 hash 일수록 lock 들도 골고루 분산된다." />
+
+즉, concurrent hash table의 성능은 다음에 달려 있다.
+
+```
+1. bucket 수
+2. hash function의 분산 품질
+3. 각 bucket 내부 list의 길이
+4. bucket별 lock contention 정도
+```
+
+```
+1. Simple counter
+   - lock 없이 쓰면 race condition 발생
+   - 단일 lock을 걸면 correctness는 보장되지만 성능 병목 발생
+
+2. Approximate / Sloppy counter
+   - local counter를 두어 global lock 경쟁을 줄임
+   - threshold S로 성능과 정확도 사이 trade-off 조절
+
+3. Concurrent linked list
+   - list 전체 lock은 단순하지만 병목이 큼
+   - critical section을 줄여야 함
+   - hand-over-hand locking은 가능하지만 overhead와 복잡도가 큼
+
+4. Concurrent queue
+   - headLock과 tailLock을 분리
+   - enqueue와 dequeue를 동시에 수행할 수 있게 함
+   - dummy node로 head/tail 충돌 문제 완화
+
+5. Concurrent hash table
+   - bucket별 linked list 사용
+   - bucket별 lock으로 fine-grained locking 구현
+   - key가 잘 분산되면 성능이 크게 좋아짐
+```
+
+
+## 한 줄 요약
+
+<Callout kind="summary" title="Lock-based concurrent data structures 한눈에">
+공통 흐름: <b>"한 덩어리 lock → 부분별 lock"</b> 으로 쪼개되, 각 쪼갬은 자기만의 비용이 있다.<br/>
+• <b>Counter</b> — 단일 lock 은 thread 수에 반비례하는 throughput. <b>Approximate counter</b> 가 local/global 로 쪼개고 threshold S 로 정확도↔성능 trade-off.<br/>
+• <b>Linked list</b> — 전체 lock 은 lookup 한 번에 전부 멈춤. <b>Hand-over-hand</b> 는 동시성을 늘리지만 lock 비용/복잡도/deadlock 위험 때문에 항상 빠른 것은 아니다.<br/>
+• <b>Queue</b> — enqueue·dequeue 가 양 끝이라는 점을 이용해 <b>headLock/tailLock 분리</b>, <b>dummy node</b> 가 두 lock 의 충돌을 막아준다.<br/>
+• <b>Hash table</b> — bucket 별 lock 으로 본격적인 fine-grained locking. <b>hash 함수의 분산 품질</b> 이 contention 분포 = 성능을 결정한다.
+</Callout>

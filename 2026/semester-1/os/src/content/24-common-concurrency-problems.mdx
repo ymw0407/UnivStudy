@@ -1,0 +1,776 @@
+<Callout kind="summary" title="이 장의 목적">
+도구(lock · CV · semaphore)를 다 배웠다고 동시성 버그가 사라지지는 않습니다. 이번 장은 실제 프로그램에서 동시성 버그가 <b>어떤 모양으로 나타나는지</b>를 다룹니다 — <b>non-deadlock bug</b>(atomicity violation · order violation)와 <b>deadlock bug</b>(4조건 · prevention / avoidance / detect&amp;recover). 각 버그마다 처방이 정해져 있다는 것이 이 장의 핵심입니다.
+</Callout>
+
+동시성 버그는 크게 두 종류다.
+
+첫 번째는 **deadlock이 아닌 동시성 버그**다.
+대표적으로 atomicity violation, order violation이 있다.
+
+두 번째는 우리가 흔히 알고 있는 **deadlock bug**다.
+deadlock이 발생하는 조건과, 그것을 예방하거나 회피하거나, 발생 후 탐지하고 복구하는 방법을 살펴본다.
+
+<BugTaxonomy caption="이 장의 전체 지도. 동시성 버그는 non-deadlock(atomicity·order violation)과 deadlock으로 나뉘고, 각각 처방이 정해져 있다 — atomicity는 lock, order는 CV, deadlock은 4조건 공략." />
+
+deadlock에 대한 대표적인 대응 방법은 세 가지다.
+
+1. **Prevention**, 예방
+    - deadlock이 발생할 수 있는 조건 자체를 깨뜨려서 아예 발생하지 못하게 하는 방식
+2. **Avoidance**, 회피
+    - 코드 자체에는 deadlock 가능성이 있더라도, 스케줄링을 잘해서 실제 실행 중에는 deadlock 상황을 피하는 방식
+3. **Detect and Recover**, 탐지 후 복구
+    - deadlock 발생을 어느 정도 허용하고, 발생하면 나중에 감지해서 복구하는 방식이다.
+
+하지만 최근 연구에서는 deadlock뿐 아니라 **non-deadlock bug**, 즉 deadlock이 아닌 동시성 버그도 많이 다룬다. 실제로는 deadlock이 아닌 동시성 버그가 더 자주 발생할 수 있기 때문이다.
+
+<Callout kind="note" title="보충 — '실제로 더 흔하다'의 근거">
+이 장의 배경에는 Lu 등의 유명한 실증 연구(2008)가 있습니다. MySQL · Apache · Mozilla · OpenOffice 같은 대형 오픈소스의 동시성 버그 105개를 분석했더니 <b>non-deadlock 버그(74개)가 deadlock 버그(31개)의 2배 이상</b>이었고, non-deadlock 버그의 <b>약 97%가 atomicity violation 아니면 order violation</b> 두 패턴이었습니다. 그래서 이 두 패턴만 제대로 알아도 실전 동시성 버그의 대부분을 커버합니다.
+</Callout>
+
+
+## Non-Deadlock Bugs
+
+> deadlock이 아닌 동시성 버그
+
+1. **Atomicity violation**, 원자성 위반
+    - 원래는 여러 메모리 접근이 하나의 묶음처럼 실행되어야 하는데,
+    - 그 중간에 다른 thread가 끼어들어서 의도한 동작이 깨지는 경우다.
+2. **Order violation**, 순서 위반
+    - 어떤 동작 A가 반드시 B보다 먼저 실행되어야 하는데,
+    - 실제 실행에서는 그 순서가 보장되지 않아서 문제가 발생하는 경우
+
+> atomicity violation은 lock과 연결
+> order violation은 condition variable과 연결
+
+
+## Atomicity Violation Bugs (원자성 위반 버그)
+
+```c
+Thread1::
+if (thd->proc_info) { // null이 아니였는데 
+    ...
+    fputs(thd->proc_info, ...); // 컨텍스트 스위치 이후 null이 된 경우
+    ... // 이런 경우에는 lock으로 ciritical section을 보호하자.
+}
+
+Thread2::
+thd->proc_info = NULL; // 다른 쓰레드가 null로 중간에 바꿔버림
+```
+
+<AtomicityViolationTimeline caption="실제 MySQL에서 발견된 버그. Thread 1의 'NULL 검사'와 '사용' 사이는 한 덩어리여야 하는데, 그 틈에 Thread 2가 NULL을 써 버리면 검사를 통과한 fputs가 NULL을 역참조한다." />
+
+-> 해결해보자
+
+```c
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+Thread1::
+pthread_mutex_lock(&lock); // lock걸기
+if (thd->proc_info) {
+    ...
+    fputs(thd->proc_info, ...);
+    ...
+}
+pthread_mutex_unlock(&lock); // unlock하기
+
+Thread2::
+pthread_mutex_lock(&lock); // lock걸기
+thd->proc_info = NULL;
+pthread_mutex_unlock(&lock); // unlock하기
+```
+
+<Callout kind="tip" title="보충 — 핵심은 '양쪽 모두' 같은 lock을 잡는 것">
+Thread 1만 lock을 잡으면 소용이 없습니다. <b>그 공유 데이터를 만지는 모든 thread가 같은 lock을 잡아야</b> "검사 + 사용"이 한 덩어리가 됩니다. 그리고 이것이 18장에서 정의한 atomicity 그대로입니다 — 문제의 본질은 <i>"프로그래머가 한 덩어리라고 가정한 구간(critical section)이 실제로는 쪼개질 수 있었다"</i>는 것.
+</Callout>
+
+
+## Order-Violation Bugs (순서 위반 버그)
+
+order violation은 어떤 동작 A가 반드시 B보다 먼저 실행되어야 하는데,
+실제 실행에서는 그 순서가 보장되지 않아서 발생한다.
+
+```c
+Thread1::
+void init() {
+    mThread = PR_CreateThread(mMain, ...);
+}
+
+Thread2::
+void mMain(...) {
+    mState = mThread->State;
+}
+// init() -> mMain()이 실행되어야함
+// mMain은 이미 mThread가 초기화되어있다고 가정함
+// 멀티 쓰레드 환경에선 thread1이 먼저 실행된다는 보장이 없음
+```
+
+> A가 먼저 실행되어야 B가 안전한데, 스케줄러는 그 순서를 자동으로 보장해주지 않는다.
+
+<OrderViolationCompare caption="왼쪽이 프로그래머의 머릿속 순서, 오른쪽이 스케줄러가 실제로 만들 수 있는 순서. 해결은 22장의 3박자(lock + CV + state variable)로 순서를 '강제'하는 것." />
+
+해결
+
+```c
+pthread_mutex_t mtLock = PTHREAD_MUTEX_INITIALIZER;
+// 상태 변수 `mtInit`을 보호하기 위한 lock
+pthread_cond_t mtCond = PTHREAD_COND_INITIALIZER;
+// 기다리는 thread를 재우고 깨우기 위한 condition variable
+int mtInit = 0;
+// 실제 조건을 나타내는 state variable
+
+Thread1::
+void init() {
+    ...
+    mThread = PR_CreateThread(mMain, ...);
+
+    // thread가 생성되었음을 알린다.
+    pthread_mutex_lock(&mtLock);
+    mtInit = 1;                   // 상태 변수 변경: 초기화 완료
+    pthread_cond_signal(&mtCond); // 기다리는 thread를 깨움
+    pthread_mutex_unlock(&mtLock);
+    ...
+}
+
+Thread2::
+void mMain(...) {
+    // mThread가 초기화될 때까지 기다린다.
+    pthread_mutex_lock(&mtLock);
+    while (mtInit == 0)
+        pthread_cond_wait(&mtCond, &mtLock);
+    pthread_mutex_unlock(&mtLock);
+
+    mState = mThread->State;
+    ...
+}
+```
+
+<Callout kind="note" title="보충 — 22장 패턴이 그대로 재등장">
+이 코드는 22장 condition variable의 정석 패턴 그대로입니다.<br/>
+• <b>state variable(<code>mtInit</code>)이 있어야</b> Thread 1이 먼저 끝나도 신호가 증발하지 않습니다 (signal은 저장되지 않지만 state는 남으니까).<br/>
+• <b><code>if</code>가 아니라 <code>while</code></b>인 이유도 동일 — Mesa semantics에서는 깨어났다고 조건이 보장되지 않으므로 재검사가 필수.<br/>
+• 23장 식으로 말하면, <b>초기값 0짜리 semaphore</b> 하나로도 같은 순서 강제(ordering)를 만들 수 있습니다 (<code>init</code>이 post, <code>mMain</code>이 wait).
+</Callout>
+
+
+## Deadlock Bugs
+
+> deadlock은 여러 thread가 서로의 자원을 기다리면서 무한히 멈춰 있는 상황
+
+```c
+Thread 1:
+lock(L1);
+lock(L2);
+
+// -----------
+
+Thread 2:
+lock(L2);
+lock(L1);
+```
+
+- Thread 1이 `L1`을 잡는다.
+- Context switch가 발생한다.
+- Thread 2가 `L2`를 잡는다.
+- 다시 Thread 1이 실행된다.
+- Thread 1은 `L2`를 잡으려고 하지만, 이미 Thread 2가 잡고 있다.
+- Thread 1은 기다린다.
+- Thread 2가 다시 실행된다.
+- Thread 2는 `L1`을 잡으려고 하지만, 이미 Thread 1이 잡고 있다.
+- Thread 2도 기다린다.
+
+그래프로 표현하면 cycle이 생긴다.
+
+- Thread 1 → L2를 원함
+- L2 → Thread 2가 보유
+- Thread 2 → L1을 원함
+- L1 → Thread 1이 보유
+
+<DeadlockCycle caption="18장에서 본 그 그림 그대로 — 실선(holds)이 잡고 있는 lock, 점선(waits)이 기다리는 lock. 두 점선이 만나 순환이 되면 어느 쪽도 진행할 수 없다." />
+
+그런데 이런 단순한 예제만 보면 *"저런 코드를 누가 짜?"* 싶다. 실제로 deadlock이 생기는 이유는 두 가지다.
+
+1. **코드가 복잡**
+    - 간단한 예제에서는 `lock(L1)` 다음에 `lock(L2)`가 바로 보이기 때문에 deadlock 가능성을 쉽게 알 수 있음
+    - 실제 프로그램에서는 lock을 잡는 코드 사이에 수십 줄, 수백 줄의 코드가 들어갈 수 있다.
+    - 그러면 어떤 thread가 어떤 lock을 잡고 있는지, 어떤 순서로 lock을 요청하는지 한눈에 파악하기 어렵다.
+2. **encapsulation** (캡슐화)
+    - 좋은 라이브러리나 API는 내부 구현을 숨김
+        - 사용자는 내부에서 lock을 잡는지 몰라도 기능을 사용할 수 있음
+    - 하지만 동시성 관점에서는 문제가 될 수 있다.
+        - 어떤 함수 내부에서 lock을 잡고 있는데, 사용자가 그 사실을 모르면 lock 획득 순서를 제대로 관리하기 어렵다.
+        - 그래서 모듈화와 캡슐화는 코드 사용성을 높이지만, locking과는 잘 맞지 않는 경우가 있다.
+
+
+## Java Vector AddAll — encapsulation으로 인한 deadlock
+
+Java의 `Vector`는 각 객체마다 자기 lock을 가진다.
+사용자는 그냥 `AddAll()`을 호출하지만, 내부적으로는 두 vector에 대해 lock을 잡아야 한다.
+
+```c
+vector v1, v2;
+
+// thread 1
+v1.AddAll(v2);
+
+// thread 2
+v2.AddAll(v1);
+
+----------------
+// v1.AddAll(v2)의 내부 동작 개념
+lock(v1);     // this object에 대한 lock
+lock(v2);     // argument object에 대한 lock
+// v2의 모든 원소를 v1에 추가
+unlock(v2);
+unlock(v1);
+
+----------------
+// v2.AddAll(v1)의 내부 동작 개념
+lock(v2);
+lock(v1);
+// v1의 모든 원소를 v2에 추가
+unlock(v1);
+unlock(v2);
+```
+
+그러면 Thread 1은 `v1 → v2` 순서로 lock을 잡고, Thread 2는 `v2 → v1` 순서로 lock을 잡는다.
+서로 반대 순서로 lock을 잡기 때문에 deadlock 가능성이 생긴다.
+
+> 여기서 중요한 점은 사용자가 `AddAll()` 내부에서 lock을 잡는다는 사실을 모를 수 있다는 것이다.
+
+<VectorAddAllDeadlock caption="사용자가 쓴 코드는 AddAll 한 줄씩뿐이지만, 내부의 lock 획득 순서가 서로 반대라 자원 그래프에 cycle이 생긴다. lock이 보이지 않으니 호출하는 쪽에서 순서를 맞출 방법도 없다." />
+
+
+## Deadlock 조건
+
+deadlock은 다음 네 조건이 동시에 만족될 때 발생할 수 있다.
+
+1. **Mutual Exclusion**
+    자원을 한 번에 하나의 thread만 사용할 수 있어야 한다.
+    즉, lock처럼 배타적으로 점유되는 자원이 있어야 한다.
+2. **Hold-and-wait**
+    어떤 thread가 이미 자원을 가지고 있으면서, 동시에 다른 자원을 기다리는 상황이다.
+    예를 들어 Thread 1이 `L1`을 잡은 상태로 `L2`를 기다리는 경우다.
+3. **No preemption**
+    다른 thread가 가지고 있는 자원을 외부에서 강제로 빼앗을 수 없어야 한다.
+    lock은 일반적으로 잡은 thread가 unlock하기 전까지 강제로 회수되지 않는다.
+4. **Circular wait**
+    thread들이 서로 원형으로 자원을 기다리는 cycle이 있어야 한다.
+
+| 조건 | 의미 |
+| ---------------- | ----------------------------- |
+| Mutual Exclusion | 자원을 한 번에 하나의 thread만 사용할 수 있음 |
+| Hold-and-wait | 자원을 가진 상태에서 다른 자원을 기다림 |
+| No preemption | 자원을 외부에서 강제로 빼앗을 수 없음 |
+| Circular wait | 서로 기다리는 cycle이 존재함 |
+
+<Callout kind="note" title="보충 — Coffman 조건, 그리고 '필요조건'이라는 말의 의미">
+이 네 가지를 <b>Coffman conditions</b>(1971)라고 부릅니다. 중요한 뉘앙스: 이것은 <b>필요조건</b>입니다 — 4개가 모두 성립해야 deadlock이 <i>가능</i>해지는 것이지, 성립한다고 반드시 발생하는 것은 아닙니다(타이밍이 운 좋게 비켜갈 수 있음). 거꾸로 말하면 <b>하나라도 깨지면 deadlock은 절대 발생할 수 없다</b> — prevention 전략이 노리는 지점이 정확히 여기입니다.
+</Callout>
+
+<DeadlockConditionsBreak caption="4조건과 각각을 깨는 prevention 기법의 1:1 매핑. 아래 절들이 이 그림의 ④ → ② → ③ → ① 순서로 하나씩 깨 본다." />
+
+
+## Prevention — Circular Wait 깨기
+
+circular wait은 lock을 서로 다른 순서로 잡기 때문에 발생한다.
+따라서 모든 thread가 lock을 항상 같은 순서로 잡도록 강제하면 cycle이 생기지 않는다.
+
+```c
+// 순서가 반대이므로 deadlock 가능성이 있다.
+Thread 1:
+lock(L1);
+lock(L2);
+
+Thread 2:
+lock(L2);
+lock(L1);
+
+---------- // 항상 같은 순서로 lock을 잡게 만들면 된다.
+Thread 1:
+lock(L1);
+lock(L2);
+
+Thread 2:
+lock(L1);
+lock(L2);
+
+---------- // lock 주소값을 기준으로 순서를 강제하는 예시
+if (m1 > m2) {
+    pthread_mutex_lock(m1);
+    pthread_mutex_lock(m2);
+} else {
+    pthread_mutex_lock(m2);
+    pthread_mutex_lock(m1);
+}
+```
+
+여기서는 주소값 기준으로 항상 일정한 순서로 lock을 잡는다.
+
+> 중요한 것은 오름차순이든 내림차순이든 상관없이, 모든 thread가 같은 기준을 따라야 한다는 점
+
+deadlock의 핵심은 cycle입니다. lock을 잡는 순서를 전체 시스템에서 하나로 정해버리면, 기다림 관계가 한 방향으로만 생기기 때문에 cycle이 만들어지지 않습니다.
+
+<Callout kind="tip" title="보충 — total order와 partial order, 그리고 실무">
+lock이 2개면 전체 순서(total order)를 정하면 되지만, lock이 수백 개인 시스템에서는 <b>부분 순서(partial order)</b> — "이 그룹의 lock은 항상 이 lock 다음에" — 로 관리합니다. Linux 커널의 메모리 매핑 코드가 대표적인 예로, 주석에 lock 획득 순서가 10줄 넘게 문서화되어 있습니다. 23장의 식사하는 철학자에서 <b>한 명만 포크 순서를 바꿔서</b> deadlock을 깬 것도 정확히 같은 원리(circular wait 깨기)입니다. 참고로 위의 주소 비교 트릭에는 함정이 하나 있습니다 — <code>m1 == m2</code>로 <b>같은 lock을 두 번 잡으면</b> 그 자체로 멈추므로, 같은 객체를 넘기는 경우를 따로 걸러야 합니다.
+</Callout>
+
+
+## Prevention — Hold-and-wait 깨기
+
+두 번째 방법은 **hold-and-wait** 조건을 깨는 것이다.
+
+hold-and-wait은 어떤 thread가 하나의 lock을 가진 상태에서 다른 lock을 기다릴 때 발생한다.
+따라서 여러 lock이 필요하다면, 처음부터 한 번에 모두 잡도록 만들면 된다.
+
+```c
+lock(prevention); // 글로벌 락을 걸어서 L1만 잡고 L2를 기다리는 상태를 줄일 수 있음
+lock(L1);
+lock(L2);
+...
+unlock(prevention);
+```
+
+하지만 이 방식에는 문제가 있다.
+
+첫 번째 문제는 어떤 함수가 내부에서 어떤 lock을 잡는지 알아야 한다는 점이다.
+예를 들어 `AddAll()` 같은 캡슐화된 함수 내부에 lock이 숨어 있으면, 호출하는 쪽에서 모든 lock을 미리 알기 어렵다.
+
+```c
+vector v1, v2;
+
+// thread 1
+v1.AddAll(v2); // addall에 lock이 숨겨져있음(encapsulation)
+
+// thread 2
+v2.AddAll(v1);
+```
+
+두 번째 문제는 concurrency가 줄어든다는 점이다.
+내가 실제로 보호하고 싶은 critical section보다 훨씬 앞에서 lock을 잡아야 할 수 있다.
+
+> 즉, critical section이 불필요하게 길어진다.
+
+> hold-and-wait을 막기 위해 모든 lock을 한 번에 잡게 만들 수는 있습니다. 하지만 그러려면 어떤 lock이 필요한지 미리 알아야 하고, lock을 너무 일찍 잡게 되어 병렬성이 떨어지는 문제가 생깁니다.
+
+<Callout kind="note" title="보충 — 글로벌 락 prevention이 동작하는 진짜 이유">
+<code>lock(prevention)</code>이 막는 것은 "L1·L2를 잡는 행위 자체가 동시에 일어나는 것"입니다. 즉 <b>lock 획득 구간 전체를 또 하나의 critical section으로</b> 만든 것이죠. 누군가 L1을 잡았다면 이미 prevention 락 안에서 L2까지 잡고 나올 것이므로, "L1만 든 채 L2를 기다리는 상태"가 관찰되지 않습니다. 대신 lock을 잡는 모든 코드가 이 글로벌 락에서 직렬화되므로 concurrency 비용이 큽니다.
+</Callout>
+
+
+## Prevention — No Preemption 깨기
+
+일반적인 lock은 한 번 잡으면 다른 thread가 강제로 빼앗을 수 없다.
+그리고 어떤 thread가 lock을 기다릴 때, 이미 가지고 있는 lock을 계속 들고 있으면 deadlock이 발생할 수 있다.
+
+이를 해결하기 위해 `trylock()`을 사용할 수 있다.
+
+> `trylock()`은 lock을 얻을 수 있으면 얻고, 얻을 수 없으면 기다리지 않고 실패를 반환한다.
+
+```c
+top:
+// L1을 먼저 잡음
+lock(L1);
+// L2를 잡을때 `tryLock()`으로 시도
+if (tryLock(L2) == -1) {
+	// 실패시 L1 놓고 돌아감 // 처음부터 다시 시도한다.
+    unlock(L1);
+    goto top;
+}
+```
+
+> 즉, "자원을 가진 채로 다른 자원을 기다리는 상태"를 깨뜨린다.
+
+
+## No Preemption 방식의 문제 — Livelock
+
+`trylock()`을 사용하면 deadlock 가능성을 줄일 수 있지만, 새로운 문제가 생길 수 있다.
+
+그 문제가 바로 **livelock**이다.
+
+livelock은 thread들이 멈춰 있는 것은 아니지만, 계속 같은 동작을 반복하면서 실제 진전은 없는 상태다.
+
+```c
+// Thread 1
+top:
+lock(L1);
+if (tryLock(L2) == -1) {
+    unlock(L1);
+    goto top;
+}
+```
+
+```c
+// Thread 2
+top:
+lock(L2);
+if (tryLock(L1) == -1) {
+    unlock(L2);
+    goto top;
+}
+```
+
+- Thread 1이 `L1`을 잡는다.
+- Thread 2가 `L2`를 잡는다.
+- Thread 1은 `L2`를 tryLock하지만 실패한다.
+- Thread 1은 `L1`을 놓고 다시 시도한다.
+- Thread 2는 `L1`을 tryLock하지만 실패한다.
+- Thread 2는 `L2`를 놓고 다시 시도한다.
+- 이 패턴이 계속 반복된다.
+
+<LivelockTimeline caption="두 thread의 타이밍이 계속 맞아떨어지면 '잡고 → 실패하고 → 풀고'가 무한 반복된다. CPU는 바쁘게 도는데 아무도 전진하지 못함 — 좁은 복도에서 마주친 두 사람이 같은 방향으로 계속 비켜주는 상황." />
+
+> 해결책으로는 다시 시도하기 전에 **random delay**를 넣을 수 있다.
+> 그러면 두 thread의 타이밍이 계속 똑같이 맞아떨어지는 것을 피할 수 있다.
+
+<Callout kind="note" title="보충 — deadlock · livelock · starvation 구분 (시험 단골)">
+세 단어는 모두 "진행이 안 됨"이지만 상태가 다릅니다.<br/>
+• <b>Deadlock</b> — 모두 <b>blocked</b>. CPU도 안 쓰고 영원히 멈춤. (서로의 lock을 기다림)<br/>
+• <b>Livelock</b> — 모두 <b>running</b>. CPU는 계속 쓰는데 진전이 없음. (계속 양보/재시도만 반복)<br/>
+• <b>Starvation</b> — <b>일부만</b> 진행 못 함. 시스템 전체는 잘 돌아감. (예: 23장 reader-writer lock의 writer)
+</Callout>
+
+
+## Prevention — Mutual Exclusion 깨기
+
+deadlock은 lock 같은 배타적 자원이 있기 때문에 발생한다.
+
+> 그렇다면 lock을 사용하지 않고 자료구조를 만들 수 있다면 deadlock이 발생하지 않는다.
+
+이런 방식이 **wait-free** 또는 lock-free 계열의 접근이다.
+
+여기서 사용하는 대표적인 하드웨어 명령이 **Compare-And-Swap**, CAS다.
+
+```c
+// 비교와 대입이 하나의 atomic instruction처럼 수행
+int CompareAndSwap(int *address, int expected, int new) {
+    if (*address == expected) { 
+	    // `address`가 가리키는 현재 값이 `expected`와 같은지 비교
+        *address = new; // 같으면 `new`로 바꾼다.
+        return 1; // success // 성공하면 1을 반환한다.
+    }
+    return 0; // fail // 다르면 바꾸지 않고 0을 반환한다.
+}
+```
+
+| 구분 | Test-and-Set | Compare-and-Swap |
+|---|---|---|
+| 동작 | 무조건 새 값으로 바꿈 | 현재 값이 expected와 같을 때만 바꿈 |
+| 반환 | 보통 old value 반환 | 보통 성공/실패 또는 actual value 반환 |
+| lock 구현 | 가능 | 가능 |
+| lock-free 자료구조 구현 | 제한적 | 훨씬 유용 |
+| 실패 시 메모리 write | 함 | 안 함 |
+
+> Test-and-Set은 "무조건 바꾸고 예전 값을 알려주는 연산"이고,
+> CAS는 "현재 값이 내가 예상한 값일 때만 바꾸는 연산"이다.
+
+mutual exclusion을 깨는 방식은 lock을 없애는 접근입니다. Compare-And-Swap 같은 atomic instruction을 사용하면, lock 없이도 특정 업데이트를 안전하게 만들 수 있습니다.
+
+<Callout kind="note" title="보충 — 20장의 CAS와 무엇이 다른가">
+명령 자체는 20장에서 본 CAS와 같습니다. 차이는 <b>용도</b>입니다. 20장에서는 CAS로 <b>lock을 만들었고</b>(flag를 0→1로), 여기서는 CAS로 <b>lock 자체를 없앱니다</b> — 자료구조 업데이트를 lock 없이 직접 atomic하게 수행하는 것. 같은 도구의 두 번째 쓰임새입니다.
+</Callout>
+
+
+## AtomicIncrement — CAS로 원자적 증가 구현
+
+```c
+void AtomicIncrement(int *value, int amount) {
+    do {
+        int old = *value;
+    } while (CompareAndSwap(value, old, old + amount) == 0);
+}
+
+// 아래는 교재에 없음 -> old 스코프 이슈 때문에 이렇게 하는게 맞음
+void AtomicIncrement(int *value, int amount) {
+    int old;
+    do {
+        old = *value;  // 현재 값을 읽음
+        // value가 여전히 old라면 old + amount로 바꾼다.
+        // 그 사이 다른 thread가 value를 바꿨다면 CAS는 실패한다.
+    } while (CompareAndSwap(value, old, old + amount) == 0);
+}
+```
+
+이 방식은 lock을 사용하지 않는다.
+따라서 lock 때문에 발생하는 deadlock은 생기지 않는다.
+
+하지만 여러 thread가 계속 동시에 CAS에 실패하면 livelock 가능성은 남아 있다.
+
+### AtomicIncrement 반복 실패의 의미
+
+예를 들어 현재 `*value`가 10이라고 하자.
+Thread A와 Thread B가 동시에 실행된다.
+
+1. Thread A가 `old = 10`을 읽는다.
+2. Thread B도 `old = 10`을 읽는다.
+3. Thread A가 CAS를 수행해서 `10 → 11`로 바꾸는 데 성공한다.
+4. Thread B도 CAS를 수행하려고 한다.
+5. 그런데 Thread B가 기대한 값은 10인데, 실제 값은 이미 11이다.
+6. Thread B의 CAS는 실패한다.
+7. Thread B는 다시 현재 값을 읽고 재시도한다.
+
+이 방식은 중간에 다른 thread가 값을 바꿨는지 CAS가 확인해주기 때문에 안전하다.
+
+
+## Lock 기반 insert와 wait-free insert 비교
+
+```c
+// 기존 lock 기반 방식
+void insert(int value) {
+    node_t *n = malloc(sizeof(node_t));
+    assert(n != NULL);
+    n->value = value;
+    lock(listlock);       // critical section 시작
+    n->next = head;
+    head = n;
+    unlock(listlock);     // critical section 끝
+}
+// list의 head를 수정하는 부분을 lock으로 보호
+// `n->next = head`와 `head = n`은 함께 atomic하게 보장되어야 한다.  
+// 그 사이에 다른 thread가 끼어들면 list 구조가 깨질 수 있기 때문이다.
+
+// CAS를 사용하는 wait-free 방식
+void insert(int value) {
+    node_t *n = malloc(sizeof(node_t));
+    assert(n != NULL);
+    n->value = value;
+    do {
+        n->next = head;
+    } while (CompareAndSwap(&head, n->next, n) == 0); 
+    // CAS로 `head`가 여전히 `n->next`와 같다면, `head`를 `n`으로 바꾼다
+    // 다른 thread가 head를 바꿨다면 CAS는 실패
+}
+```
+
+<LockVsCasInsert caption="왼쪽은 lock으로 두 줄을 묶는 방식, 오른쪽은 CAS가 'head가 그대로일 때만' 교체하는 방식. CAS 실패는 곧 '다른 thread가 끼어들었다'는 증거이므로 새 head를 읽어 다시 시도하면 된다." />
+
+이 방식은 lock을 잡지 않는다.
+따라서 lock을 기다리다가 생기는 deadlock은 없다.
+
+> 하지만 이 코드도 여러 thread가 계속 동시에 경쟁하면 CAS 실패가 반복될 수 있다. -> live lock 가능성 있음
+
+<Callout kind="tip" title="한 걸음 더 — lock-free의 숨은 함정, ABA 문제">
+CAS는 "값이 그대로인가"만 봅니다. 그런데 값이 <b>A → B → 다시 A</b>로 바뀌었다면? CAS는 "그대로네"라고 착각하고 성공해 버립니다. linked list에서 그 사이 노드가 free되고 같은 주소로 재할당됐다면 구조가 조용히 깨질 수 있죠. 그래서 실전 lock-free 자료구조는 포인터에 <b>버전 카운터를 같이 묶어 CAS</b>하거나(tagged pointer), hazard pointer 같은 기법을 씁니다. 수업 범위 밖이지만 "lock-free가 공짜는 아니다"의 대표 사례로 기억해 두면 좋습니다.
+</Callout>
+
+
+## Deadlock Avoidance via Scheduling — 데드락 회피
+
+- prevention
+    - deadlock의 네 조건 중 하나를 깨뜨려서 deadlock이 구조적으로 발생하지 못하게 하는 방식
+- avoidance
+    - 코드 자체에는 deadlock 가능성이 있더라도, 실제 스케줄링을 조절해서 deadlock 상황이 발생하지 않게 하는 방식
+
+### Avoidance via Scheduling
+
+각 thread가 실행 중 어떤 lock을 잡을 수 있는지 미리 알아야 한다.
+즉, 스케줄러가 다음과 같은 global knowledge를 가져야 한다.
+
+- Thread 1은 어떤 lock을 사용하는가?
+- Thread 2는 어떤 lock을 사용하는가?
+- 두 thread를 동시에 실행하면 deadlock 가능성이 있는가?
+- 그렇다면 둘을 동시에 실행하지 않도록 스케줄링할 수 있는가?
+
+일반적인 OS가 모든 프로그램의 lock 사용 패턴을 미리 정확히 알기는 어렵다.
+
+| Thread | L1 사용 | L2 사용 |
+|---|---|---|
+| T1 | yes | yes |
+| T2 | yes | yes |
+| T3 | no | yes |
+| T4 | no | no |
+
+여기서 핵심은 `T1`과 `T2`다.
+
+둘 다 `L1`과 `L2`를 사용한다.
+만약 T1과 T2가 서로 반대 순서로 lock을 잡는 코드라면, 두 thread가 동시에 실행될 때 deadlock 가능성이 있다. (ex. L1→L2 순으로 잡고 하나는 L2→L1 순으로 잡으면 circular 만족)
+
+따라서 smart scheduler는 T1과 T2를 동시에 실행하지 않도록 스케줄링할 수 있다.
+
+```txt
+CPU 1:  T3  →  T4
+CPU 2:  T1  →  T2
+```
+
+다른 방법으로는 핵심적으로는 T1과 T2가 동시에 실행되는 구간을 피하면 된다.
+
+이렇게 하면 코드 자체에는 deadlock 가능성이 있더라도 실제 실행에서는 deadlock이 발생하지 않게 만들 수 있다.
+
+> T1과 T2가 동시에 실행되면 서로 L1, L2를 잡다가 deadlock이 날 수 있습니다.
+> 그래서 스케줄러가 둘을 병렬로 돌리지 않고 순차적으로 실행하게 만들면 deadlock을 회피할 수 있습니다.
+
+| Thread | L1 사용 | L2 사용 |
+|---|---|---|
+| T1 | yes | yes |
+| T2 | yes | yes |
+| T3 | yes | yes |
+| T4 | no | no |
+
+```txt
+CPU 1:       T3
+CPU 2:  T4 → T1 → T2
+```
+
+정확한 배치는 달라질 수 있지만, 핵심은 T1, T2, T3가 동시에 실행되지 않도록 제한하는 것이다.
+
+CPU가 두 개 있어도, 위험한 thread들을 동시에 실행하지 못하므로 전체 실행 시간이 길어진다.
+
+> 즉, deadlock은 피할 수 있지만 병렬성이 크게 줄어든다.
+
+<AvoidanceSchedule caption="위험한 thread들(같은 lock 집합을 쓰는)을 절대 겹치지 않게 배치한다. 위험한 thread가 많아질수록(시나리오 2) 직렬 구간이 길어져 CPU가 놀게 된다 — deadlock 회피의 대가는 병렬성." />
+
+<Callout kind="note" title="보충 — avoidance의 고전, Banker's Algorithm">
+"미래의 자원 요구를 미리 알고, 안전한 상태(safe state)에서만 자원을 내준다"는 avoidance의 정식 알고리즘이 Dijkstra의 <b>Banker's Algorithm</b>입니다. 매 요청마다 "이걸 허락해도 모두가 끝까지 갈 수 있는 순서가 존재하는가"를 검사하죠. 다만 이 역시 <b>각 프로세스의 최대 자원 요구량을 미리 알아야</b> 하므로, 범용 OS보다는 자원 종류가 고정된 특수 시스템(임베디드 등)에서나 현실적입니다 — 본문의 스케줄링 회피와 같은 한계.
+</Callout>
+
+
+## Detect and Recover — 탐지 후 복구
+
+이 방식은 deadlock이 가끔 발생하는 것을 허용한다.
+
+> 대신 deadlock이 발생했는지 주기적으로 검사하고, 발생하면 복구한다.
+
+예를 들어 운영체제가 완전히 멈췄다면 사용자는 컴퓨터를 재부팅할 수 있다.
+이것도 넓게 보면 recovery에 해당한다.
+
+실제로 데이터베이스 시스템에서는 deadlock detection and recovery가 많이 사용된다.
+데이터베이스는 여러 transaction이 동시에 lock을 잡고 실행되기 때문에 deadlock 가능성이 있다.
+
+> 그래서 deadlock detector가 주기적으로 실행된다.
+
+deadlock detector는 **resource graph**를 만든다.
+그래프에는 다음 관계가 들어간다.
+
+- 어떤 thread가 어떤 lock을 가지고 있는가?
+- 어떤 thread가 어떤 lock을 기다리고 있는가?
+
+그리고 이 그래프에 cycle이 있는지 확인한다.
+
+> cycle이 있으면 deadlock이 발생한 것이다.
+
+발견 후에는 다음과 같은 방식으로 복구할 수 있다.
+
+- 특정 transaction을 abort한다.
+- 특정 process/thread를 종료한다.
+- 시스템을 재시작한다.
+
+<ResourceGraphDetect caption="detector가 주기적으로 '누가 무엇을 보유/대기 중인가' 그래프를 그려 cycle을 찾는다. cycle = deadlock 확정이므로, 구성원 중 하나를 골라(victim) abort/종료시켜 cycle을 끊는다." />
+
+> detect and recover는 deadlock을 완전히 막는 것이 아니라, 발생을 허용한 뒤 주기적으로 resource graph를 검사해서 cycle이 있으면 deadlock으로 판단하고 복구하는 방식입니다.
+
+<Callout kind="note" title="보충 — 왜 DB에서는 이 방식이 정답인가">
+DB의 transaction은 <b>abort + rollback이 원래부터 내장된 연산</b>입니다 (장애 복구를 위해 어차피 필요). 그래서 "deadlock이 나면 victim transaction 하나를 abort하고 애플리케이션이 재시도"가 자연스럽고 비용도 쌉니다. MySQL InnoDB가 정확히 이렇게 동작합니다 — wait-for graph에서 cycle을 찾으면 더 작은 transaction을 victim으로 골라 즉시 abort. 반면 일반 프로그램의 thread는 "안전하게 되돌리기"가 없어서 함부로 죽일 수 없습니다 — detect&amp;recover가 DB 밖에서는 드문 이유입니다.
+</Callout>
+
+
+## Summary
+
+<StrategyDecisionFlow caption="이 장 전체를 한 장으로 — 버그를 만나면 먼저 '멈춰 있는가'로 deadlock 여부를 가르고, 아니라면 atomicity(→lock)/order(→CV), 맞다면 시점에 따라 prevention(설계) / avoidance(실행 중) / detect&recover(사후)를 고른다." />
+
+이 장의 전체 흐름을 다시 따라가 보면:
+
+```txt
+동시성 버그
+├── Non-deadlock (더 흔함)
+│   ├── Atomicity violation  → "한 덩어리"가 쪼개짐        → lock
+│   └── Order violation      → "A 먼저"가 안 지켜짐         → CV (lock+cond+state, while)
+└── Deadlock (서로 기다리며 정지)
+    ├── 진단: 4조건(ME · Hold&wait · No preemption · Circular wait) 동시 성립
+    └── 대응
+        ├── Prevention  : 4조건 중 하나를 설계로 깨기
+        │     ① ME       → CAS lock-free        (livelock 여지)
+        │     ② H&W      → 모든 lock 한 번에     (concurrency ↓)
+        │     ③ NP       → trylock + 재시도      (livelock 여지)
+        │     ④ CW       → lock 순서 고정        (가장 실용적)
+        ├── Avoidance   : lock 사용 정보를 알고 스케줄링으로 회피 (global knowledge 필요, 병렬성 ↓)
+        └── Detect&Recover : resource graph에서 cycle 탐지 → abort/종료/재시작 (DB의 표준)
+```
+
+- **동시성 버그는 크게 2가지**
+    - Non-deadlock bug
+    - Deadlock bug
+
+### Non-deadlock bug
+
+- **Atomicity violation**
+    - 여러 동작이 하나처럼 실행되어야 하는데 중간에 다른 thread가 끼어듦
+    - 예: NULL 검사 후 사용하기 전에 다른 thread가 NULL로 바꿈
+    - 해결: **lock으로 critical section 보호**
+- **Order violation**
+    - A가 B보다 먼저 실행되어야 하는데 순서가 보장되지 않음
+    - 예: 초기화 전에 사용
+    - 해결: **condition variable + state variable + lock**
+
+### Deadlock
+
+- 여러 thread가 서로 가진 자원을 기다리며 멈춤
+- 핵심: **resource wait graph에 cycle 발생**
+
+### Deadlock 발생 조건 4가지
+
+- **Mutual Exclusion**
+    - 자원을 한 번에 하나의 thread만 사용
+- **Hold-and-wait**
+    - 자원을 가진 채로 다른 자원을 기다림
+- **No preemption**
+    - 자원을 강제로 빼앗을 수 없음
+- **Circular wait**
+    - 서로 기다리는 cycle 존재
+- 시험 포인트:
+    - **4개가 모두 만족해야 deadlock 발생**
+    - **하나라도 깨면 prevention 가능**
+
+### Deadlock Prevention
+
+- **Circular wait 깨기**
+    - lock 획득 순서를 고정
+    - 예: 모든 thread가 항상 `L1 → L2` 순서로 lock
+- **Hold-and-wait 깨기**
+    - 필요한 lock을 한 번에 모두 잡음
+    - 단점: concurrency 감소
+- **No preemption 깨기**
+    - `trylock()` 사용
+    - 실패하면 잡고 있던 lock을 풀고 재시도
+    - 단점: livelock 가능
+- **Mutual exclusion 깨기**
+    - lock 대신 CAS 같은 atomic instruction 사용
+    - lock-free 구조 가능
+
+### CAS vs Test-and-Set
+
+- **Test-and-Set**
+    - 무조건 새 값으로 바꾸고 이전 값을 반환
+- **CAS**
+    - 현재 값이 expected와 같을 때만 새 값으로 바꿈
+- 핵심 차이:
+    - Test-and-Set: 무조건 write
+    - CAS: 조건부 write
+
+### Deadlock Avoidance
+
+- 스케줄링으로 deadlock 가능 상황을 피함
+- thread가 어떤 lock을 쓸지 미리 알아야 함
+- 단점:
+    - global knowledge 필요
+    - 병렬성 감소
+
+### Detect and Recover
+
+- deadlock 발생을 허용
+- resource graph에서 cycle 탐지
+- 발생 시 복구
+    - thread 종료
+    - transaction abort
+    - 시스템 재시작
+
+### 한 줄 암기
+
+- **Atomicity violation은 lock**
+- **Order violation은 condition variable**
+- **Deadlock은 4조건 모두 만족**
+- **Prevention은 4조건 중 하나 깨기**
+- **Avoidance는 스케줄링으로 피하기**
+- **Detect/Recover는 cycle 찾고 복구하기**
+
+<Callout kind="summary" title="한 줄 요약">
+멈췄으면 <b>deadlock</b> — 4조건이 다 성립한 것이고, <b>설계로 깨거나(prevention) · 스케줄로 피하거나(avoidance) · 사후에 찾아 되돌린다(detect&amp;recover)</b>. 안 멈췄는데 결과가 이상하면 <b>non-deadlock</b> — 값이 중간에 바뀌는 <b>atomicity violation은 lock</b>으로, 순서가 어긋나는 <b>order violation은 CV 3박자</b>로 잡는다.
+</Callout>

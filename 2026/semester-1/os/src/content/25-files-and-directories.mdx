@@ -1,0 +1,822 @@
+<Callout kind="summary" title="이 장의 목적">
+Part 4 영속성(Persistence)의 첫 장입니다. <b>파일과 디렉터리라는 추상화</b> — 파일은 byte 배열이고 이름의 실체는 <b>inode</b> 라는 것 — 에서 출발해, <b>open/read/write/lseek</b> 의 fd·offset 동작, <b>fork/dup</b> 의 공유, <b>fsync·rename</b> 의 영속성 보장, 그리고 <b>hard link vs symbolic link</b> 까지 — 파일 시스템 인터페이스 전체를 정리합니다.
+</Callout>
+
+| 개념 | 의미 |
+|---|---|
+| File | byte들의 선형 배열 |
+| Directory | 파일 이름과 inode number를 연결하는 특수한 파일 |
+| File descriptor | 열린 파일에 접근하기 위한 프로세스별 정수 |
+| inode | 커널/파일시스템이 실제 파일을 식별하고 관리하는 metadata 구조 |
+| link/unlink | 파일 이름과 inode 사이의 연결을 만들거나 끊는 동작 |
+
+
+## File
+
+파일은 단순히 byte들의 선형 배열이다.
+
+즉, OS 입장에서는 `.txt`, `.jpg`, `.c` 같은 의미가 중요한 것이 아니라, 파일은 결국 **연속된 byte stream**이다.
+
+또한 각 파일에는 사람이 읽는 이름과 별개로 **low-level name**이 있다. 이게 `inode number`다.
+
+| 구분 | 의미 |
+| ------------------ | -------------------------------- |
+| user-readable name | 사용자가 보는 이름. 예: `bar.txt` |
+| low-level name | 커널이 파일을 식별하는 이름. 예: inode number |
+
+커널이 실제 파일을 식별하는 integer이며 unique한 값 → 단일 파일 시스템(Partition) 내부에서 유일
+
+<Callout kind="note" title="보충 — '파일 시스템 내부에서' 유일하다는 것의 의미">
+inode number 는 한 파티션(파일 시스템) 안에서만 유일합니다. 다른 파티션에는 같은 번호의 전혀 다른 파일이 있을 수 있죠. 그래서 시스템 전체에서 파일을 유일하게 식별하려면 <code>stat</code> 결과의 <b>(st_dev, st_ino) 쌍</b>이 필요합니다. 같은 이유로 <b>hard link 를 다른 파일 시스템으로 만들 수 없습니다</b> — inode 번호가 그 경계를 넘으면 의미가 없어지기 때문입니다.
+</Callout>
+
+
+## Directory
+
+> Linux에서 directory도 file이다.
+> 다만 일반 파일과 달리 내부에 다음과 같은 쌍을 저장한다.
+
+```txt
+<user-readable filename, low-level filename(=inode)>
+----------------------------------------------------
+"bar.txt"  → inode 12345
+"foo"      → inode 54321
+----------------------------------------------------
+directory file의 data block
+[
+  { name: ".",         inode: 67158087 },
+  { name: "..",        inode: 67158086 },
+  { name: "file1.txt", inode: 67158084 },
+  { name: "foo",       inode: 67158085 },
+  ...
+]
+```
+
+디렉터리 = directory entry들의 리스트
+각 entry = (파일 이름, inode number) 쌍
+
+<NameVsInode caption="이름(사용자용)과 inode 번호(커널용)는 분리되어 있고, 그 둘을 잇는 표가 디렉터리다. 디렉터리 자체도 '이 표를 내용으로 갖는 파일'일 뿐." />
+
+```txt
+/ 디렉터리에서 "foo" 이름을 찾음
+→ foo의 inode를 찾음
+→ foo 디렉터리 안에서 "bar.txt" 이름을 찾음
+→ bar.txt의 inode를 찾음
+```
+
+<PathResolutionWalk caption="경로 해석 = '이름 → inode' 변환을 경로 성분마다 반복하는 과정. 디렉터리가 깊을수록 이 왕복이 늘어난다." />
+
+파일 시스템은 사용자 프로그램에게 시스템 콜 형태의 인터페이스를 제공한다.
+
+| 기능 | 대표 시스템 콜 |
+| --------- | --------------------- |
+| 파일 생성 | `open()` + `O_CREAT` |
+| 파일 읽기/쓰기 | `read()`, `write()` |
+| offset 이동 | `lseek()` |
+| 파일 정보 확인 | `stat()` |
+| 파일 삭제 | `unlink()` |
+| 디렉터리 생성 | `mkdir()` |
+| 디렉터리 읽기 | `readdir()` |
+| 링크 생성 | `link()`, `symlink()` |
+
+
+## Interface: Creating a File
+
+> 파일 생성은 `open()` 시스템 콜에 `O_CREAT` 플래그를 붙여 수행
+
+```c
+int fd = open("foo", O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
+```
+
+| 플래그 | 의미 |
+| ---------- | ------------------------ |
+| `O_CREAT` | 파일이 없으면 생성 |
+| `O_WRONLY` | 쓰기 전용으로 열기 |
+| `O_TRUNC` | 기존 내용이 있으면 파일 크기를 0으로 만듦 |
+| `S_IRUSR` | 사용자 읽기 권한 |
+| `S_IWUSR` | 사용자 쓰기 권한 |
+
+```txt
+open() → file descriptor 반환
+```
+
+| fd | 의미 |
+| ---- | --------------- |
+| 0 | standard input |
+| 1 | standard output |
+| 2 | standard error |
+| 3 이상 | 새로 열린 파일에 할당 |
+
+가장 작은, 비어있는 fd table 칸에 할당시킴
+
+xv6 기준으로 프로세스 구조체에는 열린 파일을 가리키는 배열이 있다.
+
+```c
+struct proc {
+    ...
+    struct file *ofile[NOFILE]; // Open files
+    ...
+};
+```
+
+즉, 프로세스는 `fd`를 통해 커널 내부의 열린 파일 객체에 접근한다.
+
+<Callout kind="tip" title="보충 — '가장 작은 빈 fd' 규칙이 redirection 의 비밀">
+shell 의 <code>echo hello &gt; foo</code> 는 이 규칙을 이용합니다. fork 후 자식에서 <b><code>close(1)</code></b> 로 stdout 자리를 비우고 <b><code>open("foo", …)</code></b> 을 호출하면, "가장 작은 빈 칸" 규칙에 따라 foo 가 <b>fd 1</b> 을 차지합니다. 이후 exec 된 프로그램이 평소처럼 fd 1 에 write 하면 그대로 파일로 들어가죠 — 2장(Process API)에서 본 redirection 의 정체입니다.
+</Callout>
+
+
+## Interface: Reading and Writing Files
+
+```bash
+prompt> echo hello > foo
+prompt> cat foo
+hello
+prompt>
+```
+
+`echo hello > foo`는 `hello`라는 출력을 `foo` 파일에 저장.
+`cat foo`는 `foo` 파일의 내용을 읽어서 화면에 출력.
+
+`>`가 output redirection —
+원래 화면으로 나가야 할 standard output이 파일로 방향이 바뀐 것.
+
+```txt
+echo hello
+→ 원래는 stdout으로 출력
+
+echo hello > foo
+→ stdout이 foo 파일로 연결됨
+```
+
+`strace`를 사용하면 `cat foo`가 실제로 어떤 시스템 콜을 호출하는지 확인할 수 있다.
+
+```bash
+prompt> strace cat foo
+...
+open("foo", O_RDONLY | O_LARGEFILE) = 3
+# foo 파일을 읽기 전용으로 열고, file descriptor 3을 반환
+
+read(3, "hello\n", 4096) = 6
+# fd 3(foo 파일)에서 최대 4096바이트를 읽음
+# 실제로는 "hello\n" 6바이트를 읽어서 사용자 버퍼에 저장
+# read(fd=3, buffer, count=4096)를 호출했더니
+# buffer 안에 "hello\n"이 들어갔고 반환값은 6이었다
+
+write(1, "hello\n", 6) = 6
+# fd 1(stdout)에 "hello\n" 6바이트를 씀
+# 그래서 화면에 hello가 출력됨
+hello
+
+read(3, "", 4096) = 0
+# fd 3에서 다시 읽으려 했지만 더 이상 읽을 데이터가 없음
+# read()가 0을 반환하면 EOF, 즉 파일 끝
+
+close(3) = 0
+# fd 3을 닫음. 0은 close 성공을 의미
+...
+prompt>
+```
+
+<Callout kind="note" title="시험 포인트 — 이 strace 출력에서 자주 묻는 것">
+• open 의 반환이 <b>3</b> 인 이유 — 0/1/2 는 stdin/stdout/stderr 가 이미 차지.<br/>
+• 첫 read 의 반환 <b>6</b> — 요청은 4096 이지만 실제 읽은 byte 수("hello\n" = 5글자 + 개행).<br/>
+• 두 번째 read 의 반환 <b>0</b> — 더 읽을 게 없음 = <b>EOF</b>.<br/>
+• write 의 첫 인자 <b>1</b> — 화면(stdout)으로 출력.
+</Callout>
+
+
+## Offset
+
+파일을 열면, 열린 파일 객체에는 **offset**이 생긴다.
+offset은 다음 `read()`나 `write()`가 파일의 어느 위치에서 시작할지를 의미한다.
+
+```c
+struct {
+    struct spinlock lock;
+    struct file file[NFILE];
+} ftable;
+
+struct file {
+    int ref;          // 이 열린 파일 객체를 참조하는 수
+    char readable;    // 읽기 가능 여부
+    char writable;    // 쓰기 가능 여부
+    struct inode *ip; // 연결된 inode
+    uint off;         // 현재 파일 offset
+};
+```
+
+> `read()`나 `write()`가 호출될 때마다 offset이 자동으로 증가
+
+| System Call | Return Code | Current Offset |
+|---|--:|--:|
+| `fd = open("file", O_RDONLY);` | 3 | 0 |
+| `read(fd, buffer, 100);` | 100 | 100 |
+| `read(fd, buffer, 100);` | 100 | 200 |
+| `read(fd, buffer, 100);` | 100 | 300 |
+| `read(fd, buffer, 100);` | 0 | 300 |
+| `close(fd);` | 0 | - |
+
+같은 파일을 두 번 열면?
+
+<OffsetIndependence caption="open 을 따로 하면 open file table(OFT) entry 가 따로 생긴다. fd1 과 fd2 는 서로 다른 entry 를 가리키므로 offset 도 완전히 독립." />
+
+> `fd1`과 `fd2`는 서로 다른 open file table entry를 가리키므로 offset도 독립적.
+> 같은 파일을 열더라도 open을 따로 하면 offset은 따로 관리된다.
+
+
+## lseek()
+
+특정 위치에서 읽거나 쓰고 싶으면 `lseek()`를 사용.
+
+```c
+off_t lseek(int fd, off_t offset, int whence);
+```
+
+| 인자 | 의미 |
+|---|---|
+| `fd` | offset을 바꿀 열린 파일 |
+| `offset` | 이동할 위치 또는 이동량 |
+| `whence` | 기준점 |
+
+| `whence` | 의미 |
+|---|---|
+| `SEEK_SET` | 파일 시작 기준으로 offset 위치로 이동 |
+| `SEEK_CUR` | 현재 위치 기준으로 offset만큼 이동 |
+| `SEEK_END` | 파일 끝 기준으로 offset만큼 이동 |
+
+| System Call | Return Code | Current Offset |
+|---|--:|--:|
+| `fd = open("file", O_RDONLY);` | 3 | 0 |
+| `lseek(fd, 200, SEEK_SET);` | 200 | 200 |
+| `read(fd, buffer, 50);` | 50 | 250 |
+| `close(fd);` | 0 | - |
+
+> `lseek()`는 디스크 I/O를 수행하지 않는다. 파일 내용을 읽거나 쓰는 것이 아니라, offset 값만 바꾼다.
+
+<Callout kind="warning" title="흔한 오해 — lseek 와 disk seek">
+<code>lseek()</code> 라는 이름 때문에 "디스크 헤드를 움직이는(seek) 연산" 으로 오해하기 쉽지만, 실제로는 <b>open file table entry 의 offset 정수 하나를 바꾸는 것</b>이 전부입니다. 디스크 접근은 다음 read/write 때 일어납니다.
+</Callout>
+
+
+## fork() and dup()
+
+`fork()`를 하면 자식 프로세스는 부모 프로세스의 file descriptor table을 상속받는다.
+
+하지만 여기서 중요한 점은, fd table이 복사되더라도 내부의 열린 파일 객체는 **공유**될 수 있다는 것이다.
+
+```txt
+Parent fd table ─┐
+                 ├── open file table entry ─── inode
+Child fd table  ─┘
+```
+
+부모와 자식이 같은 open file table entry를 공유하면 **offset도 공유**.
+
+`dup()`도 비슷하다. 기존 fd를 복제해서 같은 열린 파일 객체를 가리키는 새 fd를 만든다.
+
+```txt
+fd 3 ─┐
+      ├── same open file table entry
+fd 4 ─┘
+```
+
+<ForkDupShare caption="fork 는 프로세스 사이에서, dup 은 한 프로세스 안에서 — 둘 다 같은 open file entry 를 가리키게 만들어 ref count 가 올라가고 offset 이 공유된다. 따로 open 한 경우(위 그림)와 정반대." />
+
+`fork()` 이후 자식이 `lseek()`를 수행하면 부모도 같은 offset을 보게 되는 예제:
+
+```c
+int main(int argc, char *argv[]) {
+    int fd = open("file.txt", O_RDONLY);
+    assert(fd >= 0);
+    int rc = fork();
+    if (rc == 0) {
+        rc = lseek(fd, 10, SEEK_SET);
+        printf("child: offset %d\n", rc);
+    } else if (rc > 0) {
+        (void) wait(NULL);
+        printf("parent: offset %d\n",
+               (int) lseek(fd, 0, SEEK_CUR));
+    }
+    return 0;
+}
+```
+
+```bash
+prompt> ./fork-seek
+child: offset 10
+parent: offset 10
+# fork 후 부모와 자식이 같은 open file table entry를 공유 → offset이 공유됨
+```
+
+<Callout kind="note" title="보충 — 정리하면 세 가지 경우">
+• <b>각자 open</b> → entry 도 각자 → offset <b>독립</b>.<br/>
+• <b>fork 로 상속</b> → 같은 entry (ref 증가) → offset <b>공유</b>.<br/>
+• <b>dup 으로 복제</b> → 같은 entry (ref 증가) → offset <b>공유</b>.<br/>
+ref count 는 close 때마다 감소하고, 0 이 되어야 entry 가 해제됩니다. <code>dup2(fd, 1)</code> 처럼 번호를 지정해 복제하면 shell 의 redirection 을 더 직접적으로 구현할 수 있습니다.
+</Callout>
+
+
+## fsync()
+
+일반적으로 `write()`는 데이터를 즉시 디스크에 쓰지 않는다.
+
+> OS가 일단 buffer에 쓰고 나중에 storage에 반영
+
+```txt
+write()
+→ buffer에 씀
+→ 나중에 flusher thread 등이 disk에 반영
+```
+
+> 어떤 프로그램은 "나중에 언젠가"가 아니라 **지금 당장 디스크에 저장되었다는 보장**이 필요
+
+<WriteBufferFsync caption="write 의 기본 동선은 page cache 까지 — 그 사이 crash 가 나면 데이터가 유실될 수 있다. fsync(fd) 는 '디스크에 박힐 때까지' 기다렸다가 반환하는 강제 수단." />
+
+```c
+int fsync(int fd);
+
+// ----------------------
+int fd = open("foo", O_CREAT | O_WRONLY | O_TRUNC);
+// foo 파일을 쓰기 전용으로 열어라.
+// 만약 foo가 없으면 새로 만들어라.
+// 만약 foo가 이미 있으면 기존 내용을 싹 비워라.
+int rc = write(fd, buffer, size);
+rc = fsync(fd);
+
+// 새 파일을 만들었을 때는 파일 내용뿐 아니라 디렉터리 엔트리도 안전하게 저장해야 할 수 있다.
+int dirfd = open(".", O_DIRECTORY | O_RDONLY);
+rc = fsync(dirfd); // flush → 넘긴 dirfd에 해당하는 것만 flush함
+```
+
+| 호출 | 의미 |
+| ---------------- | --------------------------------- |
+| `fsync(file_fd)` | 파일 내용과 관련 metadata를 디스크에 강제 반영 |
+| `fsync(dir_fd)` | 디렉터리 엔트리, 즉 파일 이름의 존재를 디스크에 강제 반영 |
+
+<Callout kind="tip" title="보충 — 왜 디렉터리까지 fsync 해야 하나">
+"foo 라는 이름이 존재한다" 는 정보는 foo 의 inode 가 아니라 <b>부모 디렉터리의 data block</b>(entry 리스트)에 있습니다. 새 파일을 만들고 <code>fsync(fd)</code> 만 하면 <b>내용은 디스크에 있는데 이름이 없는</b> 상태로 crash 날 수 있죠. 그래서 내구성이 중요한 프로그램(DB 등)은 파일 fsync 후 <b>디렉터리 fd 에도 fsync</b> 합니다.
+</Callout>
+
+```c
+// echo hello > foo
+open("foo", O_CREAT | O_WRONLY | O_TRUNC, mode);
+
+// echo hello >> foo (append) — 새로 작성이 아니라 추가
+open("foo", O_CREAT | O_WRONLY | O_APPEND, mode);
+
+// S_IRUSR | S_IWUSR 는 "파일을 만들 경우, 소유자에게 읽기/쓰기 권한을 준다"
+int fd = open("foo", O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR);
+```
+
+
+## Renaming Files
+
+```bash
+prompt> mv foo bar
+```
+
+> `rename()`은 파일 이름을 바꾸는 시스템 콜이다.
+> 중요한 특징은 **atomic call**이라는 점이다.
+
+crash가 발생하더라도 파일 이름은 `foo`이거나 `bar`이지, 중간 상태가 되지 않는다.
+
+에디터가 파일을 안전하게 저장할 때 자주 쓰는 패턴은 다음과 같다.
+
+```c
+int fd = open("foo.txt.tmp", O_WRONLY | O_CREAT | O_TRUNC);
+// 임시 파일 foo.txt.tmp 생성
+write(fd, buffer, size); // write out new version of file
+// 새 내용을 임시 파일에 write
+fsync(fd);
+// fsync로 디스크에 반영
+close(fd);
+// close
+rename("foo.txt.tmp", "foo.txt");
+// rename으로 기존 foo.txt를 새 파일로 atomic하게 교체
+```
+
+<SafeSaveRename caption="원본을 직접 덮어쓰지 않고 임시 파일에 완성본을 만든 뒤 rename 으로 한 번에 바꿔치기 — crash 가 어느 줄에서 나도 foo.txt 는 항상 완전한 버전이다." />
+
+`rename()`은 이름만 바꾸는 함수처럼 보이지만, 실제 의미는 더 넓다.
+
+```bash
+rename(old_path, new_path)
+
+rename("foo", "bar");     # 같은 디렉터리 안에서 foo 라는 이름을 bar 로 바꿈
+rename("foo", "dir/foo"); # foo 를 dir/ 디렉터리 안으로 옮기기
+
+mv foo dir/
+# →
+rename("foo", "dir/foo");
+```
+
+
+## stat()
+
+`stat()`은 파일의 metadata를 가져오는 시스템 콜이다.
+metadata는 파일 내용 자체가 아니라 **파일에 대한 정보**다.
+
+| metadata 예시 | 의미 |
+| ------------ | ----------------------- |
+| inode number | 파일의 low-level name |
+| size | 파일 크기 |
+| permission | 접근 권한 |
+| owner | 소유자 |
+| link count | hard link 개수 |
+| time | access/modify/change 시간 |
+
+```c
+struct stat {
+    dev_t st_dev;         /* ID of device containing file */
+    ino_t st_ino;         /* inode number */  // ← struct stat 가져오는 곳
+    mode_t st_mode;       /* protection */
+    nlink_t st_nlink;     /* number of hard links */
+    uid_t st_uid;         /* user ID of owner */
+    gid_t st_gid;         /* group ID of owner */
+    dev_t st_rdev;        /* device ID (if special file) */
+    off_t st_size;        /* total size, in bytes */
+    blksize_t st_blksize; /* blocksize for filesystem I/O */
+    blkcnt_t st_blocks;   /* number of blocks allocated */
+    time_t st_atime;      /* time of last access */
+    time_t st_mtime;      /* time of last modification */
+    time_t st_ctime;      /* time of last status change */
+};
+```
+
+```txt
+struct stat은 user space에 있는데,
+이 metadata는 어디서 가져오는가?
+→ inode
+```
+
+```bash
+prompt> echo hello > file
+prompt> stat file
+File: 'file'
+Size: 6 Blocks: 8 IO Block: 4096 regular file
+Device: 811h/2065d Inode: 67158084 Links: 1
+# 이 파일은 device ID가 811h, 즉 10진수로 2065인 파일시스템/디바이스 안에 있고,
+# 그 안에서 inode number는 67158084이며,
+# 이 inode를 가리키는 hard link 수는 1개다.
+Access: (0640/-rw-r-----) Uid: (30686/ root) Gid: (30686/ remzi)
+Access: 2011-05-03 15:50:20.157594748 -0500
+Modify: 2011-05-03 15:50:20.157594748 -0500
+Change: 2011-05-03 15:50:20.157594748 -0500
+```
+
+```txt
+1. 사용자 프로그램이 stat("file", &st)를 호출
+        ↓ system call
+2. 커널 모드로 진입
+        ↓
+3. 커널이 디렉터리에서 "file" 이름을 찾음
+        ↓
+4. 해당 파일의 inode를 찾음
+        ↓
+5. inode에 있는 metadata를 읽음
+        ↓
+6. 그 정보를 user space에 있는 struct stat st로 복사
+        ↓
+7. 사용자 프로그램은 st.st_size, st.st_ino 등을 읽을 수 있음
+
+// struct stat은 그냥 사용자 프로그램이 만든 일반 변수.
+```
+
+### fd 에서 디스크까지 — 전체 구조 한 장
+
+| 개념 | 위치/역할 |
+|---|---|
+| inode | 파일 자체의 metadata. 디스크에 저장 |
+| open file table entry | 파일을 열었을 때 커널 메모리에 생기는 객체 |
+| file descriptor | 프로세스가 열린 파일 객체를 가리키는 정수 |
+| offset | open file table entry에 저장되는 현재 위치 |
+
+<FdToDiskChain caption="read(3, buf, 4096) 한 줄이 통과하는 다섯 층 — fd table → struct file → in-memory inode → on-disk inode → data blocks. 각 정보가 '어느 층에 사는지'가 시험 포인트." />
+
+그래서 `read(3, buf, 4096)` 흐름은:
+
+```txt
+1. user가 fd 3을 넘김
+2. kernel이 현재 프로세스의 fd table[3]을 봄
+3. 거기서 struct file을 찾음
+4. struct file의 offset과 inode pointer를 봄
+5. inode를 통해 실제 데이터 블록 위치를 찾음
+6. 디스크 또는 page cache에서 데이터를 읽음
+7. user buffer인 buf로 복사
+8. struct file의 offset 증가
+```
+
+> 즉, `stat()`이 보는 정보는 inode에 있고, `offset`은 파일을 열었을 때 생기는 열린 파일 객체에 있다.
+
+
+## Removing Files
+
+Linux의 `rm` 명령은 내부적으로 `unlink()`를 호출한다.
+
+```bash
+prompt> strace rm foo
+...
+unlink("foo")
+...
+prompt>
+```
+
+```txt
+rm foo
+= foo라는 이름과 inode 사이의 link를 제거
+```
+
+> 파일 삭제는 정확히 말하면 **파일 이름을 inode로부터 unlink하는 것**
+
+
+## Making Directories
+
+```bash
+prompt> mkdir dir && cd dir
+prompt> ls -al
+total 8
+drwxr-x---  2 root root    6 Apr 30 16:17 ./
+drwxr-x--- 26 root root 4096 Apr 30 16:17 ../
+```
+
+디렉터리를 만들면 비어 있는 것처럼 보이지만, 실제로는 기본 엔트리 두 개가 있다.
+
+| 엔트리 | 의미 |
+| ---- | ------- |
+| `.` | 자기 자신 |
+| `..` | 부모 디렉터리 |
+
+
+## Reading Directories
+
+디렉터리는 파일이지만, 일반적인 `read()`로 읽지 않는다.
+디렉터리의 구조가 정해져 있기 때문에 전용 인터페이스를 사용한다.
+
+| 함수 | 의미 |
+|---|---|
+| `opendir()` | 디렉터리 열기 |
+| `readdir()` | 디렉터리 엔트리 하나씩 읽기 |
+| `closedir()` | 디렉터리 닫기 |
+
+```c
+int main(int argc, char *argv[]) {
+    DIR *dp = opendir("."); /* open current directory */
+    assert(dp != NULL); // 있는 디렉토리인지 점검
+    struct dirent *d;
+    while ((d = readdir(dp)) != NULL) { /* read one directory entry */
+        // NULL일 때까지 읽기 → 끝까지 하나하나 읽기
+        printf("%d %s\n", (int) d->d_ino, d->d_name);
+    }
+    closedir(dp); /* close current directory */
+    return 0;
+}
+```
+
+실행 결과는 `ls -i`와 비슷하다.
+
+```bash
+> ls -i
+67158084 file1.txt
+67158085 foo
+67158086 ..
+67158087 .
+```
+
+`ls`도 결국 디렉터리 엔트리를 읽어서 보여주는 프로그램.
+
+### struct dirent
+
+```c
+struct dirent {
+    char d_name[256];        /* filename */     // 파일 이름
+    ino_t d_ino;             /* inode number */
+    off_t d_off;             // 다음 directory entry로 가기 위한 offset
+    unsigned short d_reclen; /* length of this record */ // 이 record의 길이
+    unsigned char d_type;    /* type of file */ // 파일 타입
+};
+```
+
+> 디렉터리는 파일 이름과 inode number의 쌍을 저장하는 특수한 파일
+
+```txt
+d_off
+--------------------------------
+offset 0   : "."       inode=100
+offset 24  : ".."      inode=50
+offset 48  : "foo.txt" inode=201
+offset 80  : "bar.c"   inode=202
+offset 112 : "dir1"    inode=203
+```
+
+`foo.txt` entry를 읽었다면, 그 다음 entry는 `bar.c`니까 `d_off`는 다음 위치인 `80` 같은 값을 가질 수 있다.
+
+```txt
+d_reclen
+----------------------------
+"a"
+"foo.txt"
+"very_long_filename_123.txt"
+-----------------------------
+이 세 entry는 이름 길이가 다르니까, 실제 record 크기도 달라질 수 있다.
+"이 entry는 몇 바이트짜리 record인가?"
+-----------------------------
+entry "a"                     → record length 24
+entry "foo.txt"               → record length 32
+entry "very_long_filename..." → record length 56
+```
+
+```txt
+d_type
+----------------------------
+DT_REG     // regular file
+DT_DIR     // directory
+DT_LNK     // symbolic link
+DT_UNKNOWN // 알 수 없음
+----------------------------
+// 일반 파일
+d_name = "foo.txt"
+d_type = DT_REG
+----------------------------
+// 디렉터리
+d_name = "dir1"
+d_type = DT_DIR
+```
+
+| 타입 | 의미 |
+| ------------- | --------------------------- |
+| 일반 파일 | `foo.txt` 같은 일반 파일 |
+| 디렉터리 | `dir1` 같은 폴더 |
+| symbolic link | `link -> target` 같은 심볼릭 링크 |
+| 기타 | device file, FIFO, socket 등 |
+
+
+## Hard Links
+
+`link()`는 기존 파일에 새 이름을 붙이는 시스템 콜.
+
+```bash
+prompt> echo hello > file
+prompt> cat file
+hello
+prompt> ln file file2   # create a hard link, link file to file2
+prompt> cat file2
+hello
+prompt> ls -i file file2
+67158084 file    # inode value is 67158084
+67158084 file2   # inode value is 67158084
+prompt>
+```
+
+```txt
+file  ─┐
+       ├── inode 67158084 ─── data: "hello"
+file2 ─┘
+```
+
+`file`과 `file2`는 이름은 다르지만 같은 inode를 가진다.
+따라서 둘은 같은 파일을 가리킨다.
+
+> Hard link는 하나의 파일에 여러 개의 이름 또는 경로를 부여하는 것
+
+### 파일 생성과 hard link 생성의 차이
+
+일반적으로 파일을 만들 때는 다음 과정이 필요하다.
+
+| 단계 | 설명 |
+|---|---|
+| Step 1 | inode를 만든다 |
+| Step 2 | 사람이 읽을 수 있는 이름을 inode에 연결한다 |
+| Step 3 | 디렉터리에 해당 이름을 넣는다 |
+
+hard link는 **Step 1을 하지 않는다.**
+
+```txt
+새 inode 생성 X
+기존 inode에 새 이름만 추가
+```
+
+> hard link 생성 후에는 old file과 new file이 본질적으로 차이가 없다.
+> file과 file2는 같은 inode를 가리키는 동등한 이름이다.
+
+### unlink Hard Links
+
+`unlink()`는 파일 이름과 inode 사이의 연결을 제거한다.
+
+| 단계 | 설명 |
+|---|---|
+| 1 | inode 내부의 reference count 또는 link count 확인 |
+| 2 | 사람 읽기용 파일 이름과 inode 사이의 link 제거 |
+| 3 | link count 감소 |
+| 4 | link count가 0이면 inode와 data block을 해제 |
+
+파일 이름 하나를 지운다고 항상 파일 데이터가 사라지는 것은 아니다.
+hard link가 여러 개 있으면, 하나를 삭제해도 나머지 이름이 같은 inode를 계속 가리킨다.
+
+```bash
+prompt> echo hello > file          # create file
+prompt> stat file
+... Inode: 67158084 Links: 1 ...   # Link count is 1
+prompt> ln file file2              # hard link file2
+prompt> stat file
+... Inode: 67158084 Links: 2 ...   # Link count is 2
+prompt> stat file2
+... Inode: 67158084 Links: 2 ...   # Link count is 2
+prompt> ln file2 file3             # hard link file3
+prompt> stat file
+... Inode: 67158084 Links: 3 ...   # Link count is 3
+prompt> rm file                    # remove file
+prompt> stat file2
+... Inode: 67158084 Links: 2 ...   # Link count is 2
+prompt> rm file2                   # remove file2
+prompt> stat file3
+... Inode: 67158084 Links: 1 ...   # Link count is 1
+prompt> rm file3
+```
+
+| 상태 | link count |
+| ---------------- | ----------------------------: |
+| `file`만 있음 | 1 |
+| `ln file file2` | 2 |
+| `ln file2 file3` | 3 |
+| `rm file` | 2 |
+| `rm file2` | 1 |
+| `rm file3` | 0 → 실제 inode/data block 해제 가능 |
+
+<HardLinkCount caption="이름 셋이 inode 하나를 가리키는 구조(왼쪽)와 ln/rm 에 따른 link count 추적(오른쪽). 마지막 이름까지 unlink 되어 count 가 0 이 되어야 데이터가 해제된다." />
+
+> 마지막 이름까지 unlink되어 link count가 0이 되어야 실제 파일 데이터가 삭제될 수 있다.
+
+<Callout kind="note" title="보충 — hard link 의 두 가지 제한과 그 이유">
+• <b>디렉터리에는 hard link 를 만들 수 없다</b> (일반적으로 제한) — 허용하면 디렉터리 그래프에 cycle 이 생겨 ".." 의 의미와 트리 순회가 깨질 수 있기 때문.<br/>
+• <b>다른 파일 시스템으로는 불가</b> — inode number 는 한 파일 시스템 안에서만 유일하므로, 경계를 넘으면 가리킬 방법이 없기 때문.<br/>
+이 두 한계를 모두 우회하는 것이 다음의 symbolic link 입니다.
+</Callout>
+
+
+## Symbolic Links
+
+symbolic link는 hard link와 다르다.
+
+> symbolic link는 대상 파일의 inode를 직접 공유하지 않고, **대상 경로 문자열을 저장하는 별도의 파일**이다.
+
+```bash
+prompt> echo hello > file
+prompt> ln -s file file2   # option -s: create a symbolic link
+prompt> cat file2
+hello
+```
+
+| 구분 | Hard Link | Symbolic Link |
+| --------- | ------------------------ | ------------------------ |
+| inode | 원본과 같은 inode | 자기 자신의 inode를 가짐 |
+| 저장 내용 | 같은 파일 데이터 참조 | 대상 경로 문자열 저장 |
+| 디렉터리 link | 일반적으로 제한됨 | 가능 |
+| 다른 파일 시스템 | 불가 | 가능 |
+| 원본 삭제 시 | 다른 hard link가 있으면 데이터 유지 | dangling reference 발생 가능 |
+
+symbolic link는 path를 문자열로 저장하므로, 다른 파일 시스템이나 디렉터리도 가리킬 수 있다.
+
+```bash
+prompt> ls -al
+drwxr-x---  2 remzi remzi   29 May 3 19:10 ./
+drwxr-x--- 27 remzi remzi 4096 May 3 15:14 ../
+-rw-r-----  1 remzi remzi    6 May 3 19:10 file
+lrwxrwxrwx  1 remzi remzi    4 May 3 19:10 file2 -> file
+# file2는 실제 데이터를 직접 가진 것이 아니라, "file"이라는 경로 문자열을 가진다.
+```
+
+<Callout kind="tip" title="시험 포인트 — symlink 의 크기가 4 인 이유">
+위 <code>ls -al</code> 에서 file2 의 크기가 <b>4 byte</b> 인 것에 주목 — symlink 파일의 내용이 <b>"file" 이라는 경로 문자열(4글자)</b> 그 자체이기 때문입니다. 대상이 <code>/usr/local/bin/x</code> 였다면 크기는 16 이 됩니다. 타입 문자가 <code>l</code>(lrwxrwxrwx) 인 것도 함께 기억해 두세요.
+</Callout>
+
+원본을 삭제하면 문제가 생긴다.
+
+```bash
+prompt> echo hello > file
+prompt> ln -s file file2
+prompt> cat file2
+hello
+prompt> rm file
+prompt> cat file2
+cat: file2: No such file or directory
+----------------
+file2는 남아 있음
+하지만 file2가 가리키는 "file" 경로가 사라짐
+→ 접근 실패
+```
+
+이 상황을 **dangling reference**라고 한다.
+
+<SymlinkDangling caption="symlink 는 자기 inode 를 따로 갖고 '경로 문자열'만 저장한다. 원본이 unlink 되면 경로가 허공을 가리키는 dangling reference — hard link 라면 데이터가 유지됐을 상황." />
+
+
+## 한 줄 요약
+
+<Callout kind="summary" title="Files and Directories 한눈에">
+• <b>파일 = byte 배열 + inode</b>(진짜 이름). <b>디렉터리 = (이름, inode 번호) 쌍을 담는 특수 파일</b> — 경로 해석은 이 표를 따라가는 반복.<br/>
+• <b>fd → open file entry(offset·ref·inode 포인터) → inode → data</b> 의 사슬. offset 은 entry 에, metadata 는 inode 에 (stat 이 보는 곳).<br/>
+• 따로 open = offset <b>독립</b> / fork·dup = entry 공유 = offset <b>공유</b>. lseek 는 offset 만 바꾼다 (disk I/O 없음).<br/>
+• <b>write 는 버퍼까지</b> — 보장이 필요하면 <b>fsync</b> (새 파일은 디렉터리 fsync 도). 안전 저장 = tmp + fsync + <b>atomic rename</b>.<br/>
+• 삭제 = <b>unlink</b> — link count 를 줄일 뿐, <b>0 이 되어야</b> 데이터 해제. hard link 는 같은 inode 의 동등한 이름, <b>symlink 는 경로 문자열 파일</b> (원본 삭제 시 dangling).
+</Callout>

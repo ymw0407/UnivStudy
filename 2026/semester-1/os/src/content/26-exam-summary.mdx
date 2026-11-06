@@ -1,0 +1,477 @@
+<Callout kind="summary" title="이 장의 목적">
+시험 직전에 한 번에 훑는 페이지입니다. <b>Swapping: Mechanisms(15장)부터 Files and Directories(25장)까지</b> — 각 장이 &ldquo;어떤 문제 때문에 등장했고, 어떤 한계가 다음 개념을 불렀는가&rdquo; 관점으로 한 줄기로 이어집니다. 자세한 내용이 필요하면 각 절의 링크로 해당 장에 바로 들어갈 수 있습니다.
+</Callout>
+
+## 전체 지도 — 세 개의 큰 이야기
+
+이 범위는 크게 **세 개의 이야기** 로 나뉜다.
+
+```txt
+이야기 1. 메모리의 마지막 조각 — "물리 메모리가 부족하면?"
+  물리 메모리 부족
+    → disk 일부를 swap space로 (15장: Mechanisms)
+    → present bit = 0 인 page 접근 → page fault → swap-in 후 재실행
+    → 빈 frame이 없으면 누군가를 내보내야 함
+    → "누구를 내보낼까" = replacement policy (16장: Policies)
+    → AMAT 기준으로 OPT / FIFO / Random / LRU / Clock 비교
+    → 그래도 메모리가 너무 부족하면 thrashing
+
+이야기 2. 동시성 — "한 프로세스 안에 실행 흐름이 여러 개라면?"
+  thread 도입: 주소 공간 공유 + PC/SP/stack은 각자 (18장)
+    → 공유가 쉬운 만큼 race condition 발생
+    → critical section을 lock으로 보호 (19장: API, 20장: 구현)
+    → lock 구현 = hardware atomic instruction + OS의 sleep/wake
+    → lock으로 자료구조를 보호하되, 잘게 쪼개야 성능 (21장)
+    → "조건을 기다렸다 깨어나기"는 lock만으로 안 됨 → CV (22장)
+    → lock + CV + state를 하나로 묶은 추상화 = Semaphore (23장)
+    → 도구를 다 갖춰도 버그는 남는다 (24장: Common Concurrency Problems)
+       · 안 멈추는 버그: atomicity violation(→lock) · order violation(→CV)
+       · 멈추는 버그: deadlock 4조건 → prevention / avoidance / detect&recover
+
+이야기 3. 영속성 — "데이터를 전원이 꺼져도 남게 하려면?" (25장: Files & Directories)
+  file = byte 배열 + inode(진짜 이름) · directory = (이름, inode) 쌍의 특수 파일
+    → open() → fd → open file entry(offset) → inode 의 사슬
+    → 따로 open = offset 독립 / fork·dup = entry 공유 = offset 공유
+    → write는 버퍼까지 → 보장은 fsync, 안전 저장 = tmp + fsync + atomic rename
+    → 삭제 = unlink (link count 0이어야 데이터 해제) · hard link vs symlink
+```
+
+## 순서도로 보기 — 무엇이 막혀서, 무엇을 도입했나
+
+위 지도를 **"문제 발생 → 무언가 추가 → 새 한계 → 보완"** 의 사슬로 펼치면 다음과 같다. 빨강 = 막힌 지점, 초록 = 그걸 풀려고 도입한 것, 주황 = 도입한 것의 새 한계.
+
+<SwappingProblemChain caption="이야기 1 (15~16장). 'DRAM 부족' 하나에서 출발해 swap space → present bit → page fault handler → replacement policy(OPT → FIFO → LRU → Clock) → dirty bit까지 — 각 단계는 바로 앞 단계가 남긴 구멍을 메우기 위해 등장했다. 마지막 thrashing은 swapping 자체의 근본 한계." />
+
+<ConcurrencyProblemChain caption="이야기 2 (18~24장). thread 도입이 만든 race condition을 lock으로 막고, lock의 구멍(atomicity 없음 → spin 낭비 → starvation → lost wakeup)을 HW와 OS가 차례로 메운다. lock이 완성되면 자료구조(fine-grained)와 조건 대기(CV)로 확장되고, semaphore가 전부를 하나로 통합한다. 마지막 24장은 그래도 남는 버그들 — atomicity/order violation과 deadlock — 의 진단·처방." />
+
+<PersistenceProblemChain caption="이야기 3 (25장). '전원이 꺼져도 남게 + 이름으로 찾게' 라는 요구에서 출발해 inode → directory → fd/offset 사슬 → fsync·rename 의 영속성 보장 → link/unlink 까지. 핵심 축은 '이름과 데이터(inode)의 분리'다." />
+
+### 비슷한 도구들은 서로를 만든다 — Lock · CV · Semaphore
+
+<SyncPrimitivesMap caption="세 동기화 도구의 상호 구현 관계. lock은 HW atomic + OS sleep으로 만들고, CV는 lock 없이는 안전하지 않으며, semaphore는 lock + CV로 구현할 수 있다(Zemaphore). 거꾸로 semaphore는 초기값에 따라 lock처럼도(init 1), CV처럼도(init 0) 동작한다. Producer/Consumer 같은 문제는 양쪽 방식 모두로 풀 수 있다." />
+
+---
+
+# 이야기 1 — Swapping: 물리 메모리보다 큰 척하기
+
+## 1. Swapping: Mechanisms — disk를 메모리처럼
+
+> 자세히: <a href="#/ch/15-swapping-mechanisms">15장 Swapping: Mechanisms</a>
+
+- **문제**
+    - 지금까지는 모든 page가 physical memory에 있다고 가정했지만, 현실에서는 DRAM이 부족할 수 있음
+- **해결**
+    - disk 일부를 **swap space** 로 예약하고 **page 단위** 로 내보내고(swap-out) 가져옴(swap-in)
+    - PTE에 **present bit** 추가: `1` = 메모리에 있음, `0` = 유효하지만 지금은 disk에 있음
+- **Valid bit vs Present bit** (시험 단골)
+
+| | 의미 | 0일 때 |
+| --- | --- | --- |
+| **valid** | 이 VPN이 합법적인 주소 공간인가? | **segmentation fault** |
+| **present** | 그 합법적인 page가 지금 메모리에 있는가? | **page fault** (trap → handler) |
+
+- **검사 순서**: `Valid → Protection → Present`. present는 앞의 둘을 통과한 뒤에만 의미가 있다.
+
+### Page fault 처리 6단계 (그림 ①~⑥)
+
+```txt
+① Reference   프로세스가 virtual address 참조 → MMU가 PTE 확인
+② Trap        present = 0 → page fault, kernel mode 진입
+③ Check       OS가 PTE를 보고 swap space의 어느 위치인지 확인
+④ Get page    빈 frame 확보(없으면 evict) 후 disk에서 읽어옴 (그동안 프로세스 sleep)
+⑤ Reset PT    PTE.present = 1, PTE.PFN = 새 PFN 으로 갱신
+⑥ Re-execute  fault 났던 instruction을 같은 PC에서 재실행
+```
+
+- **PTE 필드의 의미가 present에 따라 바뀜**: `present = 1` 이면 PFN, `present = 0` 이면 disk 주소(swap slot)
+- **PFN은 고정이 아님**: swap-in 때마다 새 frame을 받으므로 PTE 갱신 필수. swap-out 시 해당 **TLB entry도 무효화** 해야 함
+
+### Replacement는 언제 하나 — Lazy vs Daemon
+
+| | Lazy Approach | Swap/Page Daemon |
+| --- | --- | --- |
+| 시점 | 완전히 꽉 찰 때까지 기다림 | **꽉 차기 전에** 미리 확보 |
+| 동작 | 요청마다 disk I/O가 끼어듦 | background에서 여러 page evict |
+| 핵심 | 단순하지만 느림 | **Low/High Watermark**: free가 LW 아래 → daemon 시작, HW 회복 → 정지 |
+
+### Demand Paging vs Swapping (둘 다 `present = 0 → page fault`)
+
+| | Demand Paging | Swapping |
+| --- | --- | --- |
+| page의 이전 상태 | 아직 DRAM에 올라온 적 없음 | DRAM에 있다가 evict됨 |
+| 가져오는 곳 | 실행 파일·mmap 파일·zero-fill | swap space |
+
+<Callout kind="tip" title="한 걸음 더 — 어디서 가져올지는 OS가 결정">
+하드웨어(MMU)는 <b>&ldquo;지금 DRAM에 없다&rdquo;까지만</b> 판단하고 PAGE_FAULT를 던집니다. swap에서 가져올지, 원본 파일에서 가져올지, zero-fill할지는 <b>OS의 page fault handler</b>가 PTE·VMA metadata를 보고 결정합니다.
+</Callout>
+
+---
+
+## 2. Swapping: Policies — 누구를 내보낼까
+
+> 자세히: <a href="#/ch/16-swapping-policies">16장 Swapping: Policies</a>
+
+- **문제**
+    - 메모리가 꽉 찼을 때 **victim을 고르는 규칙** 이 필요함
+- **잣대: AMAT** (Average Memory Access Time)
+
+```txt
+AMAT = T_M + P_miss × T_D     (T_M ≈ 100ns, T_D ≈ 10ms)
+```
+
+- miss인지 확인하려면 어차피 메모리를 한 번 봐야 하므로 `T_M` 은 항상 더함
+- disk 항이 평균을 **지배(dominant)** → AMAT를 줄이는 유일한 길은 **P_miss(=page fault)를 줄이는 것**
+
+### 정책 비교
+
+| 정책 | 규칙 | 평가 |
+| --- | --- | --- |
+| **OPT (MIN)** | 가장 나중에 쓰일 page를 내보냄 | 구현 불가(미래를 모름), **상한선·벤치마크용** |
+| **FIFO** | 가장 먼저 들어온 page | 단순하지만 중요도 무시 → **Belady's Anomaly** (frame을 늘렸는데 fault 증가) |
+| **Random** | 무작위 | 의외로 나쁘지 않음, 가끔 OPT급 |
+| **LRU** | 가장 오래 안 쓰인 page | locality 있는 워크로드에서 OPT에 근접. 단, 매 접근마다 순서 갱신 → **구현 비쌈** |
+| **Clock** | use bit 1개로 LRU **근사** | hand가 use=1이면 0으로 리셋 후 전진, use=0을 만나면 victim. 싸고 충분히 좋음 |
+
+### 워크로드에 따라 순위가 바뀐다
+
+- **locality 없음(uniform random)** — 모든 정책이 동일. hit rate ≈ 캐시 크기 / 전체 page 수
+- **80-20 (hot/cold)** — LRU가 FIFO·Random을 확실히 앞서고 OPT에 근접
+- **Looping-sequential** — LRU/FIFO **최악** (50개 루프 + 49 frame → hit 0%), Random이 오히려 나음
+
+### 보조 기법들
+
+- **Dirty bit** — clean page(swap 사본과 동일)는 evict 시 **disk write 생략**. write는 비싸므로 큰 이득
+- **Prefetching** — 곧 쓸 것 같은 page를 미리 같이 읽기 (순차 접근에 효과적)
+- **Clustering** — 여러 page write를 모아 한 번의 큰 write로
+- **Thrashing** — 동시 프로세스가 너무 많으면(over-subscription) 모두가 page fault 처리(disk I/O)만 기다리고 CPU 사용률 급락
+
+<Callout kind="note" title="Policy ≠ Daemon (헷갈리면 안 되는 구분)">
+<b>daemon</b>(예: Linux <code>kswapd</code>)은 메모리를 실제로 회수하는 <b>실행 주체</b>, <b>LRU·Clock·FIFO</b>는 그 daemon이 victim을 고를 때 따르는 <b>선택 규칙</b>입니다. &ldquo;Clock은 swap daemon인가?&rdquo; → 아니다.
+</Callout>
+
+---
+
+# 이야기 2 — Concurrency: thread부터 semaphore까지
+
+## 3. Threads & Concurrency — 여러 실행 흐름, 하나의 주소 공간
+
+> 자세히: <a href="#/ch/18-threads-concurrency">18장 Threads &amp; Concurrency</a>
+
+- **등장 이유**
+    - virtualization은 프로세스끼리 격리해 줄 뿐, **한 프로그램 안의 동시 실행 흐름** 을 만들려면 thread가 필요
+- **공유 vs Per-thread** (시험 단골)
+
+| 공유 (process 전체) | Per-thread (각자 보유) |
+| --- | --- |
+| code · data · heap · FD table · address space · **page table** | **PC · SP · register state · user stack · kernel stack** |
+| → **PCB** 에 저장 | → **TCB** 에 저장 |
+
+- **Thread vs Process context switch**
+    - thread switch: PC/SP/register만 교체. **page table base 그대로, TLB entry 유효** → 가벼움
+    - process switch: 주소 공간이 통째로 바뀜 → page table base 교체, TLB flush(또는 ASID) → 무거움
+- **thread를 쓰는 이유 3가지**: ① 병렬화(멀티코어 활용) ② blocking I/O와 연산 overlap ③ 데이터 공유가 쉬움(IPC 불필요)
+
+### 공유의 대가 — Race Condition
+
+- `counter++` 는 한 줄이지만 기계어로는 **load → add → store** 3단계 → **atomic하지 않음**
+- 그 사이에 context switch가 끼면 두 번 더했는데 한 번만 반영 (50 → 51, 52가 아니라)
+
+<Callout kind="note" title="핵심 용어 4종 세트">
+• <b>Race condition</b> — 실행 타이밍에 따라 결과가 달라짐 (indeterminate)<br/>
+• <b>Critical section</b> — 공유 데이터를 만지는, 동시에 실행되면 안 되는 코드 구간<br/>
+• <b>Mutual exclusion</b> — 그 구간에 한 번에 하나의 thread만<br/>
+• <b>Atomicity</b> — 여러 instruction이 쪼갤 수 없는 한 덩어리처럼 실행되는 성질
+</Callout>
+
+- **해결 방향**: critical section을 `lock() / unlock()` 으로 감싸 mutual exclusion 보장
+- **주의**: lock은 **context switch를 막는 게 아니라**, 다른 thread가 같은 critical section에 *들어오는 것* 을 막는다
+- **새 문제**: lock을 잘못 쓰면 **deadlock** (서로의 lock을 기다리는 circular wait)
+
+---
+
+## 4. Thread API — pthread 4종 세트
+
+> 자세히: <a href="#/ch/19-thread-api">19장 Thread API</a>
+
+| API | 역할 | 시험 포인트 |
+| --- | --- | --- |
+| `pthread_create` | thread 시작 | 인자·반환이 `void *` (C에 generic이 없어서 cast로 처리) |
+| `pthread_join` | 종료 대기 + 반환값 수신 | 반환값은 반드시 **heap** 에 (`&local` 반환 = dangling pointer) |
+| `pthread_mutex_*` | 상호 배제 | `lock`(무한 대기) / `trylock`(즉시 포기) / `timedlock`(시한부 대기) |
+| `pthread_cond_*` | 조건 대기/신호 | wait은 **mutex를 잡고** 호출, 깨어나면 **while로 재검사** |
+
+- `pthread_cond_wait(&c, &m)` 이 mutex를 인자로 받는 이유: **"mutex 풀기 + 잠들기"를 atomic** 하게 → 풀고 잠들기 사이에 signal이 끼어들어 사라지는 **lost wakeup** 방지. 깨어날 때도 자동으로 mutex를 다시 잡고 반환
+
+---
+
+## 5. Locks — lock은 어떻게 만들어지는가
+
+> 자세히: <a href="#/ch/20-locks">20장 Locks</a>
+
+- **lock 평가 3기준**: ① **Correctness** (mutual exclusion 보장?) ② **Fairness** (starvation 없나?) ③ **Performance** (오버헤드는?)
+
+### 1단계 — Interrupt 끄기 (single CPU 전용)
+
+- critical section 동안 interrupt를 끄면 context switch가 안 일어남
+- 한계: ① 응용을 너무 신뢰 (안 켜면 CPU 독점) ② **multiprocessor에서는 무력** (다른 CPU가 접근) ③ 중요한 interrupt를 놓침
+
+### 2단계 — 그냥 flag 변수? 실패
+
+- `while (flag == 1); flag = 1;` 은 **test와 set 사이** 에 context switch가 끼면 둘 다 통과 → mutual exclusion 깨짐
+- → **hardware atomic instruction이 필요한 이유**
+
+### 3단계 — Hardware support: atomic instruction
+
+| Instruction | 동작 | 용도 |
+| --- | --- | --- |
+| **Test-And-Set** (`xchg`) | 옛값 읽기 + 새값 쓰기를 atomic으로 | 옛값 0이면 lock 획득 → 기본 spinlock |
+| **Compare-And-Swap** | **expected와 같을 때만** 새값 쓰기 | 다중 상태·lock-free 자료구조에 적합 |
+| **LL/SC** | load 후, 그 사이 아무도 안 건드렸을 때만 store 성공 | RISC식: 변경 여부를 HW가 감시 |
+| **Fetch-And-Add** | atomic하게 +1 하고 옛값 반환 | **번호표** → Ticket Lock |
+
+- **Spinlock 평가**: correctness ✓ / fairness ✗ (starvation 가능) / 성능 — single CPU에선 낭비, multicore에서 짧은 대기라면 context switch 없이 빨라서 괜찮을 수 있음
+- **Ticket Lock**: `myturn = FAA(&ticket)` 으로 도착 순 번호표, `turn == myturn` 까지 spin, unlock은 `FAA(&turn)` → **fairness 해결** (spin은 여전)
+
+### 4단계 — OS support: spin 대신 재우기
+
+- **yield** — spin 대신 CPU 양보. context switch 비용 + 순서 보장 없음(starvation 여전)
+- **queue + park/unpark** — guard(내부 spinlock)로 flag·queue를 보호하고, 못 얻으면 queue에 등록 후 `park()` 로 sleep
+    - **lost wakeup race**: "guard 풀기 → park 호출" 사이에 unpark가 먼저 도착하면 영영 잠듦
+    - **setpark()** (Solaris): "곧 잘 거다"를 미리 등록 → 그 사이 unpark가 오면 park가 즉시 반환
+- **futex** (Linux): 경합 없으면 userspace atomic 한 번으로 끝(fast path), 경합 시에만 kernel 진입(slow path)
+    - `futex_wait(addr, expected)` — 잠들기 직전 값이 expected와 다르면 안 잠들고 반환 → lost wakeup을 인자 하나로 해결
+- **Two-Phase Lock** — 잠깐 spin해 보고(곧 풀릴 것 같으면 이득) 안 되면 sleep. 실전 mutex의 형태
+
+---
+
+## 6. Lock-based Concurrent Data Structures — 한 덩어리 lock을 쪼개기
+
+> 자세히: <a href="#/ch/21-concurrent-data-structures">21장 Concurrent Data Structures</a>
+
+공통 흐름: **단일 lock은 correctness는 쉽지만 모든 thread가 한 곳에 몰려 병목** → 부분별 lock(fine-grained)으로 쪼개되, 쪼갬마다 비용이 따라온다.
+
+| 자료구조 | 단일 lock의 문제 | 쪼개는 방법 | 대가/조건 |
+| --- | --- | --- | --- |
+| **Counter** | thread 늘수록 throughput 하락 (perfect scaling 실패) | **Approximate counter**: CPU별 local counter, threshold S에 도달하면 global에 합산 | S 작으면 정확↑성능↓, S 크면 성능↑정확↓ |
+| **Linked list** | lookup 동안 전체가 멈춤 | **Hand-over-hand**: 다음 node lock 잡고 → 현재 풀기 | node마다 lock/unlock 오버헤드 커서 항상 빠르진 않음 |
+| **Queue** | enqueue/dequeue가 서로 막음 | **headLock + tailLock** 분리 (Michael &amp; Scott) | **dummy node** 가 있어야 head/tail 충돌 안 남 |
+| **Hash table** | 전체 lock 병목 | **bucket마다 lock** + bucket별 list | **hash 함수의 분산 품질** 이 성능을 결정 |
+
+- Queue의 dequeue 트릭: 값을 꺼낸 node를 **새 dummy로 승격** 시키고 옛 dummy를 free
+- malloc처럼 공유 자료와 무관한 작업은 **lock 밖으로** / return은 한 곳으로 모아 **unlock 누락 방지**
+
+---
+
+## 7. Condition Variables — 조건이 될 때까지 잠들기
+
+> 자세히: <a href="#/ch/22-condition-variables">22장 Condition Variables</a>
+
+- **문제**
+    - "조건이 만족될 때까지 기다리기"를 lock만으로 하면 **busy waiting** (CPU 낭비, single CPU면 더 심각)
+- **해결 — 3박자가 한 세트**
+
+```txt
+Condition Variable = 기다리는 thread들이 들어가는 queue (잠/깨우기 채널)
+State Variable     = 실제 조건 값 (while 검사는 이쪽으로)
+Lock               = 둘을 한 덩어리로 보호
+```
+
+- **하나라도 빠지면 생기는 일** (시험 단골)
+    - **state variable 없음** → signal이 먼저 발생하면 그냥 사라짐(저장 안 됨) → 늦게 wait한 쪽 **무한 sleep**
+    - **lock 없음** → "조건 검사 → wait 진입" 사이가 race window → 그 틈에 signal이 지나가면 **lost wakeup**
+- **Mesa semantics** (Linux/Windows 등 거의 모든 실제 OS)
+    - signal은 "깨어나도 된다"는 알림일 뿐, 깨어났을 때 조건이 여전히 참이라는 보장 없음
+    - → **반드시 `if` 가 아니라 `while` 로 재검사** (Hoare semantics는 즉시 실행을 보장하지만 구현이 비싸 안 씀)
+
+### Producer/Consumer의 발전 단계
+
+```txt
+1) lock 없이 put/get          → race condition
+2) lock + CV 1개 + if 검사     → consumer 2개부터 깨짐 (깨어난 사이 다른 놈이 먼저 소비)
+3) if → while                 → 잘못 깨어나도 재검사로 안전
+4) CV 1개 → 2개 (empty/fill)  → consumer가 consumer를 깨우는 헛신호 제거
+5) buffer를 MAX칸 circular로   → fill/use 포인터 + count
+```
+
+- **Covering condition**: 누구를 깨워야 할지 모를 때(예: 메모리 할당기) → `broadcast` 로 전부 깨우고 각자 while로 재검사. 안전하지만 불필요한 wakeup 비용
+
+---
+
+## 8. Semaphore — lock + CV + state를 하나로
+
+> 자세히: <a href="#/ch/23-semaphore">23장 Semaphore</a>
+
+- **세마포어 = 정수 값 + 대기 큐**
+    - `sem_wait` — 값 1 감소, 음수면 sleep ("자원 하나 가져가기")
+    - `sem_post` — 값 1 증가, 대기 thread 있으면 하나 깨움 ("자원 반납")
+
+| 값 | 의미 |
+| --- | --- |
+| 양수 | 남은 자원 개수 |
+| 0 | 자원 없음, 대기자도 없음 |
+| 음수 | 절댓값 = **기다리는 thread 수** |
+
+- **초기값이 용도를 결정** (시험 단골)
+    - `init = 1` → **binary semaphore** = lock (mutex처럼)
+    - `init = 0` → **signaling** = condition variable처럼 (join 패턴). 단, CV와 달리 **signal(post)이 값으로 남아 사라지지 않음** — child가 먼저 post해도 parent가 나중에 통과
+
+### Producer/Consumer 정석 (세마포어 3개)
+
+```txt
+empty = MAX   빈 칸 수 (producer가 wait)
+full  = 0     찬 칸 수 (consumer가 wait)
+mutex = 1     put/get만 감싸는 binary semaphore
+```
+
+- **순서가 생명**: `mutex` 를 `empty/full` **바깥** 에서 잡으면 → mutex 든 채로 sleep → 상대가 영영 진입 못 함 → **deadlock**. mutex는 항상 **empty/full 안쪽** 에서
+
+### Reader-Writer Lock
+
+- 규칙: reader끼리는 동시 진입 OK, writer는 단독, 서로 배타
+- 구현 트릭: **첫 번째 reader가 writelock을 잡고, 마지막 reader가 푼다** (readers count는 별도 lock으로 보호)
+- 문제: reader가 끊임없이 들어오면 writer가 영영 못 들어감 → **writer starvation** (deadlock 아님 — 멈춘 게 아니라 기회를 못 얻는 것)
+
+### Dining Philosophers
+
+- 전원이 같은 순서(왼쪽 → 오른쪽)로 포크를 집으면 **circular wait → deadlock**
+- 해결: **한 명만 반대 순서** 로 집게 해서 cycle을 끊는다 (deadlock 4조건 중 circular wait 제거)
+
+### Zemaphore — 순환 관계의 완성
+
+- semaphore를 거꾸로 **lock + CV** 로 구현 가능 (`while + cond_wait + value--` / `value++ + cond_signal`)
+- 즉 lock·CV·semaphore는 **서로를 만들 수 있는 친척** — 어느 한쪽이 본질적으로 강한 게 아님
+- 구현 차이: 정의상 semaphore는 음수 허용(대기자 수), Zemaphore의 value는 **음수가 되지 않음** (대기자는 CV queue에)
+
+---
+
+## 9. Common Concurrency Problems — 그래도 남는 버그들
+
+> 자세히: <a href="#/ch/24-common-concurrency-problems">24장 Common Concurrency Problems</a>
+
+도구를 다 배워도 버그는 남는다. 동시성 버그는 **딱 두 갈래** 로 나뉘고, 갈래마다 처방이 정해져 있다.
+
+### Non-deadlock bugs (실제로 더 흔함 — 연구상 deadlock의 2배 이상)
+
+| 버그 | 증상 | 처방 |
+| --- | --- | --- |
+| **Atomicity violation** | "검사 + 사용"이 한 덩어리여야 하는데 사이에 끼어듦 (예: NULL 검사 통과 후 다른 thread가 NULL 대입) | **양쪽 thread 모두 같은 lock** 으로 보호 |
+| **Order violation** | A(초기화)가 B(사용)보다 먼저여야 하는데 스케줄러는 순서를 모름 | **CV 3박자** (lock + cond + state, `while` 재검사) |
+
+### Deadlock — 4조건과 3대응 (시험 단골)
+
+- **4조건이 동시에 성립해야 발생** (Coffman): Mutual Exclusion · Hold-and-wait · No preemption · Circular wait → **하나만 깨면 prevention**
+
+| 깨는 조건 | 방법 | 대가 |
+| --- | --- | --- |
+| Circular wait | **lock 획득 순서 고정** (예: 주소 오름차순) | 가장 실용적 ✓ |
+| Hold-and-wait | 글로벌 lock으로 **한 번에 모두 잡기** | 내부 lock을 다 알아야 함(encapsulation 문제) · concurrency ↓ |
+| No preemption | **trylock** — 실패하면 풀고 재시도 | **livelock** 가능 (→ random delay) |
+| Mutual exclusion | lock 대신 **CAS lock-free** (예: head CAS insert) | livelock 여지, ABA 같은 함정 |
+
+- **Avoidance** — thread별 lock 사용을 미리 알고(global knowledge), 위험한 thread를 **같은 시간에 안 돌리는 스케줄링**. deadlock은 피하지만 병렬성 ↓
+- **Detect & Recover** — resource graph에서 **cycle 탐지** → transaction abort / thread 종료 / 재시작. DB(예: MySQL InnoDB)의 표준
+- **구분 주의**: deadlock(모두 blocked·정지) vs **livelock**(돌고는 있는데 진전 없음) vs **starvation**(일부만 계속 못 함, 예: RW lock의 writer)
+
+---
+
+# 이야기 3 — Persistence: 파일과 디렉터리
+
+## 10. Files and Directories — 이름과 데이터의 분리
+
+> 자세히: <a href="#/ch/25-files-and-directories">25장 Files and Directories</a>
+
+- **핵심 구도**: 파일 = **byte 배열 + inode**(커널용 진짜 이름, 파일 시스템 내 유일) / 디렉터리 = **(이름, inode 번호) 쌍을 담는 특수 파일**
+- **경로 해석**: `/foo/bar.txt` = "/ 의 entry에서 foo 찾기 → foo 의 inode → 그 안에서 bar.txt 찾기 → inode" — 이름→inode 변환의 반복
+
+### fd 사슬 (시험 단골 — "어느 층에 사는가")
+
+```txt
+fd (프로세스별 정수, 0/1/2 예약·가장 작은 빈 칸)
+  → open file table entry (struct file: ref · readable/writable · offset · inode 포인터)
+  → inode (metadata — stat()이 보는 곳)
+  → data blocks
+```
+
+| 상황 | offset |
+| --- | --- |
+| 같은 파일을 **따로 open** | entry 가 따로 → **독립** |
+| **fork** 로 fd 상속 / **dup** 으로 복제 | 같은 entry 공유(ref↑) → **공유** (자식의 lseek 가 부모에게 보임) |
+
+- **lseek 는 offset 정수만 변경** — disk I/O 없음 / read·write 는 offset 자동 증가, read 반환 0 = **EOF**
+- **redirection**: `close(1)` 후 open → 가장 작은 빈 칸 규칙으로 파일이 fd 1 차지
+
+### 영속성 보장 (시험 단골)
+
+- `write()` 는 **버퍼(page cache)까지만** — crash 시 유실 가능 → **fsync(fd)** 로 강제 반영, 새 파일은 **fsync(dirfd)** 로 "이름의 존재"까지
+- **안전 저장 패턴**: tmp 에 write → fsync → close → **rename** (atomic — 옛 파일 아니면 새 파일, 중간 상태 없음)
+
+### link / unlink (시험 단골)
+
+- **hard link** (`ln`): 새 inode 생성 없이 기존 inode 에 이름만 추가 — 원본/사본 구분 없는 **동등한 이름들**
+- **삭제 = unlink**: 이름↔inode 연결 제거 + link count 감소 → **0 이 되어야** inode/data 해제 (예: file→file2→file3 만들면 Links 3, rm 하나당 -1)
+- **symbolic link** (`ln -s`): **자기 inode 를 가진 별도 파일**로 "대상 경로 문자열" 저장 (크기 = 경로 글자 수) — 다른 파일 시스템/디렉터리 가능, 원본 삭제 시 **dangling reference**
+
+---
+
+## 최종 큰 흐름 한 줄 요약
+
+- **DRAM이 부족하다** → swap space + present bit + page fault로 disk를 메모리처럼 → **15장**
+- **누구를 내보낼까** → AMAT 기준, OPT는 상한선, 실전은 LRU를 Clock으로 근사 → **16장**
+- **한 프로세스에 여러 흐름** → thread는 주소 공간 공유, 그래서 race condition → **18장**
+- **보호 도구의 사용법** → pthread create/join/mutex/cond → **19장**
+- **lock의 속사정** → HW atomic(TAS/CAS/LL-SC/FAA) + OS sleep(park/futex), 실전은 two-phase → **20장**
+- **lock으로 자료구조 만들기** → 단일 lock은 병목, fine-grained로 쪼개되 대가를 안다 → **21장**
+- **조건 기다리기** → CV + state + lock 3박자, Mesa라서 while → **22장**
+- **셋을 하나로** → semaphore: 초기값 1이면 lock, 0이면 signal, N이면 자원 카운터 → **23장**
+- **그래도 남는 버그** → 안 멈추면 atomicity(lock)/order(CV), 멈추면 deadlock 4조건 → 깨거나·피하거나·찾아서 복구 → **24장**
+- **전원이 꺼져도 남게** → 파일=byte 배열+inode, 디렉터리=(이름,inode) 표, fd→entry→inode 사슬, fsync+atomic rename, unlink와 link count → **25장**
+
+---
+
+## 시험용 초압축 버전
+
+- **Swapping: Mechanisms**
+    - 문제: DRAM 부족
+    - 해결: swap space + present bit, page fault → ①참조 ②trap ③위치확인 ④disk read ⑤PTE 갱신 ⑥재실행
+    - 암기: valid=0 → segfault, present=0 → page fault / 검사 순서 Valid → Protection → Present / watermark daemon
+- **Swapping: Policies**
+    - 문제: victim 선택
+    - 해결: AMAT = T_M + P_miss × T_D, hit rate를 높이는 게 전부
+    - 암기: OPT=상한선, FIFO=Belady 역설, LRU=locality에 강함·구현 비쌈, Clock=use bit 근사, dirty bit=write 생략, thrashing=과다 멀티프로그래밍
+- **Threads**
+    - 공유: code/data/heap/FD/page table (PCB) — 개별: PC/SP/register/stack×2 (TCB)
+    - thread switch는 page table 안 바꿈 → TLB 유리
+    - `counter++` = load/add/store → race condition → critical section → mutual exclusion
+- **Thread API**
+    - join 반환값은 heap으로 / cond_wait = unlock+sleep atomic / 깨어나면 while 재검사
+- **Locks**
+    - 평가: correctness · fairness · performance
+    - HW: TAS(옛값 0이면 획득), CAS(expected일 때만), LL/SC(변경 감시), FAA(번호표 → ticket lock = fair)
+    - OS: yield → park/unpark(+guard, lost wakeup → setpark) → futex(expected 검사) → two-phase
+- **Concurrent Data Structures**
+    - counter → approximate(threshold S 트레이드오프) / list → hand-over-hand / queue → head·tail lock + dummy / hash → bucket lock + 좋은 hash
+- **Condition Variables**
+    - CV + state + lock 3박자. state 없으면 signal 증발, lock 없으면 race window
+    - Mesa → while 필수 / P-C는 CV 2개(empty·fill) / 모르면 broadcast(covering condition)
+- **Semaphore**
+    - 값: 양수=자원, 음수=대기자 수 / init 1=lock, 0=CV(신호 보존), MAX=칸 수
+    - P-C: mutex는 empty/full 안쪽 (밖이면 deadlock)
+    - RW lock: 첫/마지막 reader가 writelock 잡고 풀기 → writer starvation 주의
+    - 철학자: 한 명만 반대 순서로 → circular wait 깨기
+    - Zemaphore: semaphore ↔ lock+CV 상호 구현 가능
+- **Common Concurrency Problems**
+    - non-deadlock이 더 흔함: atomicity violation=lock, order violation=CV 3박자
+    - deadlock 4조건(ME·H&W·NP·CW) 모두 성립해야 — 하나 깨면 prevention
+    - 매핑: CW→순서 고정(실용적), H&W→한꺼번에, NP→trylock(livelock 주의), ME→CAS lock-free
+    - avoidance=스케줄로 회피(global knowledge, 병렬성↓) / detect&recover=cycle 찾아 abort(DB 표준)
+    - deadlock(정지) vs livelock(돌지만 진전 없음) vs starvation(일부만 굶음)
+- **Files and Directories**
+    - 파일=byte 배열, 진짜 이름=inode(파일 시스템 내 유일) / 디렉터리=(이름,inode) 쌍의 특수 파일
+    - fd(0/1/2 예약, 최소 빈 칸) → open file entry(offset·ref) → inode(metadata, stat이 보는 곳) → data
+    - 따로 open=offset 독립 / fork·dup=entry 공유=offset 공유 / lseek=offset만 변경(disk I/O 없음) / read 0=EOF
+    - write는 버퍼까지 → fsync(fd)+fsync(dirfd) / 안전 저장 = tmp+fsync+rename(atomic)
+    - rm=unlink: link count 0이어야 해제 / hard link=같은 inode 동등 이름 / symlink=경로 문자열 파일(크기=글자 수, dangling 가능)
+
+<Callout kind="summary" title="마지막 한 줄">
+첫째는 <b>&ldquo;없는 메모리를 있는 척&rdquo;</b> (swap → page fault → replacement), 둘째는 <b>&ldquo;같이 쓰는 메모리를 안 꼬이게&rdquo;</b> (race → lock → CV → semaphore → 버그 진단·처방), 셋째는 <b>&ldquo;전원이 꺼져도 남게&rdquo;</b> (inode → fd 사슬 → fsync/rename → link). 세 이야기 모두 <i>하드웨어가 mechanism을 주고, OS가 policy로 완성한다</i>는 같은 패턴입니다.
+</Callout>

@@ -1,0 +1,421 @@
+> 페이지 테이블이 너무 크다!!
+
+가상 주소를 VPN과 offset으로 나누고, VPN으로 페이지 테이블을 인덱싱해서 PTE를 찾아 PFN을 얻는 구조를 봤다. 그런데 이 구조를 그대로 쓰면, 프로세스마다 **선형(linear) 페이지 테이블** 하나를 통째로 가져야 하므로 메모리 낭비가 커진다.
+
+
+```
+예를 들어 32비트 주소 공간, 페이지 크기 4KB, PTE 크기 4바이트라고 해 보자.  
+전체 가상 주소 공간은 2^32 byte이고, 페이지 수는 2^32 / 2^12 = 2^20개다.  
+각 페이지마다 PTE가 하나씩 필요하므로 페이지 테이블 크기는
+
+2^20 × 4 byte = 4MB
+
+-> **프로세스 하나당 페이지 테이블만 4MB**가 필요
+```
+
+
+## Page 크기를 키우면 되지 않나?
+
+
+```
+예를 들어 페이지 크기를 4KB 대신 16KB로 키우면, 전체 페이지 수는 줄어든다.  
+페이지 수가 줄어들면 PTE 수도 줄어들고, 따라서 페이지 테이블도 작아진다.
+
+
+2^20 × 4 byte = 4MB
+->
+2^32 / 2^14 = 2^18 // page entry 갯수
+2^18 * 4 Byte = 1MB / 페이지 테이블 크기
+
+```
+
+
+> 하지만... 이러면 Internal Fragmentation이 커짐
+> page 한 개의 크기가 커졌기 때문
+
+
+## 진짜 문제
+
+> 프로세스의 주소 공간 전체에 대해 페이지 테이블 엔트리를 만들어야 한다
+
+현실의 프로세스는 자신의 주소 공간 전체를 사용하지 않는다.
+
+> 예를 들어 코드 일부, 힙 일부, 스택 일부만 실제로 사용하고, 나머지 큰 구간은 비어 있는 경우가 많다
+
+- 실제로 쓰는 페이지는 몇 개 안 되는데
+- 페이지 테이블은 주소 공간 전체를 커버하도록 커다랗게 만들어야 한다.
+
+-> 지금의 문제는 VPN이 생길 수 있는 만큼의 Page Table을 만들어야함....
+
+페이지 테이블 안에는 **invalid entry가 대량으로 존재**하게 된다.  
+이 invalid entry들은 실제로 의미 있는 매핑을 하지 않지만, 그 자리 자체는 메모리를 차지함
+
+
+## Hybrid Approach
+
+> "프로세스 주소 공간 전체를 하나의 선형 페이지 테이블로 관리하지 말고,  
+> **세그먼트별로 페이지 테이블을 따로 두면 되지 않을까?**"
+
+여기서는 가상 주소를 단순히 VPN + offset으로 나누는 것이 아니라,
+
+- 상위 몇 비트는 **segment number(SN)**
+- 그 다음 비트들은 **VPN**
+- 마지막 비트들은 **offset**
+
+> 세그먼트와 세그먼트 사이 또는 세그먼트 바깥에 존재하는 큰 unused virtual range에 대한 page-table 공간이 줄어든다
+
+- code ↔ heap 사이
+- heap ↔ stack 사이
+- 그 외 세그먼트 바깥쪽 unused range
+
+```
+00 / unused segment
+01 / code
+10 / heap
+11 / stack
+
+2bit/18bit           /12bit
+seg / vpn ---------> / offset ----->
+```
+
+- 사용하지 않는 큰 빈 영역에 대해서는 페이지 테이블을 안 둘 수 있다.
+- 코드/힙/스택처럼 실제로 필요한 구간만 관리하면 된다.
+- 따라서 선형 페이지 테이블 전체를 두는 것보다 공간을 절약할 수 있다.
+
+```c
+SN = (VirtualAddress & SEG_MASK) >> SN_SHIFT
+VPN = (VirtualAddress & VPN_MASK) >> VPN_SHIFT
+AddressOfPTE = Base[SN] + (VPN * sizeof(PTE))
+```
+
+
+왜냐하면 세그먼트 단위로는 줄였지만,  
+각 세그먼트 내부에서는 여전히 **선형 페이지 테이블** 을 사용하기 때문이다.
+
+예를 들어 힙이 매우 크지만 듬성듬성 쓰인다면,  
+힙 세그먼트용 페이지 테이블 안에도 invalid entry가 잔뜩 생긴다.
+
+> 희소하게(sparsely) 사용되는 세그먼트 내부 낭비는 여전히 남는다.
+> -> segmentation시 external fragmentation 문제가 다시 발생할 수 있음
+
+
+<a id="multi-level-page-table" />
+## Multi-Level Page Table
+
+> 선형 페이지 테이블을 그대로 하나의 거대한 배열로 두지 말고,  
+> **여러 개의 페이지 크기 조각(page-sized unit)으로 잘게 나누자.**
+
+- **전부 invalid인 페이지 테이블 조각** 은
+- **아예 물리 메모리에 할당하지 않는다.**
+
+> "페이지 테이블도 페이지 단위로 쪼개고, 필요한 부분만 실제로 만든다"
+
+page directory 등장!
+
+page directory는 각 페이지 테이블 조각을 대표하는 상위 구조다.  
+각 엔트리(PDE)는 "해당 페이지 테이블 페이지가 존재하는가?"를 나타내는 valid bit와,  
+존재한다면 그 페이지 테이블 페이지가 들어 있는 PFN을 가진다.
+
+- PDE(Page Directory Entry)
+	- "그 아래 페이지 테이블 페이지가 있나?"
+- PTE(Page Table Entry)
+	- "그 가상 페이지가 어느 물리 프레임에 매핑되나?"
+
+> 사용하지 않는 영역을 위한 페이지 테이블 페이지를 아예 만들지 않아도 된다
+
+
+```
+예를 들어 어떤 큰 선형 페이지 테이블을 16개의 페이지로 나눴다고 하자.  
+그런데 실제로 매핑이 존재하는 엔트리가 page 0, page 4, page 15에만 몰려 있다면,  
+나머지 13개의 페이지 테이블 페이지는 전부 invalid entry뿐일 것이다.
+
+선형 페이지 테이블이라면 16개를 전부 메모리에 둬야 한다.  
+하지만 멀티레벨 구조에서는
+
+- page directory 1개
+- 실제로 필요한 page table page 3개
+```
+
+- 주소 공간을 사용하는 양에 비례해서만 페이지 테이블 공간을 쓴다.
+- 안 쓰는 구간은 invalid PDE 하나로 "여긴 없음"이라고 압축 표현할 수 있다.
+- 그래서 희소한(sparse) 주소 공간에서 매우 효율적이다.
+
+
+```
+- Address space: 16KB = 2^14 byte
+	- 따라서 virtual address = 14 bit
+- Page size: 64 byte = 2^6 byte
+	- 따라서 offset = 6 bit
+	- offset 1bit는 1byte를 가리킴
+- VPN = 14 - 6 = 8 bit
+
+즉, 가상 페이지 수는 2^8 = 256개다.
+
+PTE 크기가 4바이트이므로, 선형 페이지 테이블 전체 크기는
+
+256 × 4 byte = 1024 byte = 1KB
+
+이다.
+
+그런데 페이지 크기가 64B이므로,  
+이 1KB짜리 페이지 테이블을 페이지 단위로 나누면
+
+1024 / 64 = 16페이지
+
+가 된다.
+
+즉, 선형 페이지 테이블은 **16개의 페이지 테이블 페이지** 로 구성된다.
+
+---------------- - linear page table
+
+
+이제 이 16개 각각을 가리키기 위해 page directory가 필요하다.  
+page directory는 "페이지 테이블의 각 페이지마다 하나의 PDE"를 가진다.  
+즉 PDE가 16개 필요하다.
+
+PDE 하나도 4바이트라고 하면,
+
+16 × 4 byte = 64 byte
+
+가 된다.
+
+그리고 page size가 64 byte이므로,  
+**page directory 전체가 딱 한 페이지에 들어간다.**
+
+이 예제에서 가상 주소는 결국 다음처럼 쪼개진다.
+
+- 상위 4비트: Page Directory Index
+- 그 다음 4비트: Page Table Index
+- 마지막 6비트: Offset
+
+즉,
+
+14비트 VA = 4비트 PDI + 4비트 PTI + 6비트 offset
+
+이 된다.
+```
+
+
+## Two-level Paging 실제 주소 변환
+
+먼저 가상 주소에서 VPN을 추출하고,  
+그 VPN의 상위 일부 비트는 **Page Directory Index** 로 사용한다.
+
+- Page directory base register(PDBR)를 기준으로 PDE 주소를 계산한다.
+- PDE를 읽는다.
+- PDE가 invalid면, 그 영역은 아예 존재하지 않는 것이므로 예외를 발생시킨다.
+- PDE가 valid면, 그 PDE가 가리키는 page table page의 PFN을 얻는다.
+- 가상 주소의 나머지 VPN 비트를 **Page Table Index** 로 써서, 해당 page table page 안의 PTE를 찾는다.
+- PTE에서 PFN을 얻고, 마지막 offset과 합쳐 최종 physical address를 만든다.
+
+- single level
+	- VPN → 바로 PTE
+- multi level
+	- VPN → PDE → PTE
+
+> 이 과정 때문에 멀티레벨 페이지 테이블은 **공간은 절약하지만, 접근은 더 복잡**해진다.
+
+
+## 왜 더 깊은 레벨이 필요한가?
+
+실제 주소 공간이 더 크면 page directory 자체도 다시 커질 수 있다.
+
+```
+예를 들어 가상 주소가 30비트이고 페이지 크기가 512B라면,
+
+// 2^30 -> address space 
+// 2^9  -> page size
+// 9bit for offset
+// 21bit for vpn // 30 - 9 = 21
+
+- offset = 9 bit
+- VPN = 21 bit
+
+가 된다.
+
+PTE 크기가 4바이트이고 페이지 크기가 512B이면,  
+한 page table page 안에는
+
+// 4Byte -> PTE
+// 512Byte -> page Size
+// 512 / 4 = 128개 -> page table entry가 128개가 됨.
+
+512 / 4 = 128 = 2^7개의 PTE
+
+가 들어간다.
+
+즉, VPN 21비트를 한 번에 다 처리할 수 없고,  
+한 page table page가 담당할 수 있는 건 7비트 분량뿐이다.
+
+그러면 페이지 테이블 전체는 2^14개의 page table page로 쪼개지게 되고,  
+이걸 가리키는 page directory도 또 커진다.
+
+-> page directory entry가 2^14개가 되어버림
+
+
+---
+그럼 3-level bit수 계산을 해봅시다.
+
+PDE가 4byte라면?
+
+512 Byte / 4 Byte -> page directory page의 entry가 128개
+
+1page에 2^7 PDE가 들어감
+
+- page directory directory index 7 bit
+- page directory index 7 bit 
+- page table index 7 bit 
+- offset 9 bit
+```
+
+
+> page directory 자체도 다시 페이지 단위로 나누어야 한다.
+
+- page directory directory
+- page directory
+- page table
+
+**3-level**, 더 나아가 **4-level** 이상으로 확장된다.
+
+> 주소 공간 크기와 페이지 크기, 그리고 한 페이지에 들어갈 엔트리 수에 따라 결정됨
+
+
+## trade off with time & space
+
+멀티레벨 페이지 테이블은 공간을 절약하지만, 그 대가로 시간이 더 든다.
+
+왜냐하면 주소 변환 시 메모리를 여러 번 더 읽어야 하기 때문이다.
+
+선형 페이지 테이블이라면 TLB miss 시 보통 페이지 테이블에서 PTE를 한 번 읽으면 된다.  
+하지만 2-level paging에서는
+
+- PDE 읽기
+- PTE 읽기
+- 실제 데이터 접근
+
+이 필요하다.
+
+즉, TLB miss가 났을 때 메모리 접근이 더 늘어난다.
+
+3-level이면 더 심하다.
+
+- 1단계 디렉토리 읽기
+- 2단계 디렉토리 읽기
+- PTE 읽기
+- 실제 데이터 접근
+
+처럼 된다.
+
+그래서 멀티레벨 페이지 테이블은 전형적인 **time-space trade-off** 다.
+
+- 공간 측면: 훨씬 효율적
+- 시간 측면: TLB miss 시 더 비쌈
+- 구조 측면: 더 복잡함
+
+```c
+VPN = (VirtualAddress & VPN_MASK) >> SHIFT
+(Success, TlbEntry) = TLB_Lookup(VPN) // TLB 조회
+if (Success) // TLB HIT
+	if (CanAccess(TlbEntry.ProtectBit) == True) // Page Table에서 하던거 똑같이 체크
+	{
+		offest = VirtualAddress & OFFSET_MASK
+		PhysAddr = (TlbEntry.PFN << SHIFT) | offset
+		AccessMemory( PhysAddr ) // physical memory에 첫번째 접근
+	} else RaiseException(PROTECTION_FAULT)
+else // TLB MISS
+{
+	PDIndex = (VFN & PD_MASK) >> PD_SHIFT
+	PDEAddr = PDBR + (PDIndex * sizeof(PDE))
+	PDE = AccessMemory(PDEAddr)
+	if (PDE.Valid == False)
+		RaiseException(SEGEMENT_FAULT)
+	else
+	{
+		PTIndex = (VFN & PT_MASK) >> PT_SHIFT
+		PTEAdrr = PTBR + (VPN * sizeof(PTE))
+	 	PTE = AccessMemory(PTEaddr); // page table에 접근하여 page table entry 가져옴
+		if (PTE.Valid == False) // 유효성 체크
+		{
+			RaiseException(SEGEMENT_FAULT)
+		}
+		else
+		{
+			TLB_INSERT( VPN, PTE.PFN, PTE.ProtectBits ) // TLB에 PTE 내용 저장
+			RetryInstruction() // 다시 돌려서 TLB Hit을 노림
+		}
+	}
+}
+```
+
+
+> 멀티레벨 페이지 테이블은 worst-case 크기를 없애는 기법이 아니라, "sparse한 보통의 경우에는 덜 쓰고, dense한 worst-case가 되면 그때 커지는" 기법이다.
+
+## Inverted Page Table
+
+**Linear page table / Hybrid / Multi-level**은 전부 기본적으로  
+**"가상 페이지 번호(VPN) → 물리 프레임 번호(PFN)"를 찾기 쉽게 만들려는 구조**고,  
+**Inverted page table**은 반대로  
+**"페이지 테이블 크기 자체를 물리 프레임 수 기준으로 줄이자"는 구조
+
+- 프로세스마다 page table이 하나씩 필요함
+- virtual address space가 크면 page table도 커짐
+- multi-level로 줄여도, 결국 많은 프로세스가 있으면 page table 오버헤드가 계속 큼
+
+> page table 크기가 virtual address space 크기에 비례한다
+
+```
+기준이 **PFN(물리 프레임 번호)** 이야.
+
+즉:
+
+PFN 0 -> 지금 누구의 어떤 VPN이 들어있음?  
+PFN 1 -> 지금 누구의 어떤 VPN이 들어있음?  
+PFN 2 -> 지금 누구의 어떤 VPN이 들어있음?  
+...
+
+즉, 물리 메모리의 각 frame마다 엔트리 하나씩만 둔다.
+```
+
+
+> **시스템 전체에서 물리 프레임 개수만큼만 엔트리**를 둔다
+
+
+즉, 물리 메모리가 1GB고 page size가 4KB면
+PFN 개수 = 1GB / 4KB
+
+- 프로세스가 1개든 100개든
+- 가상 주소 공간이 크든 작든
+
+**page table의 총 엔트리 수는 물리 프레임 수 기준으로 정해진다**
+
+
+일반 page table에서는 lookup이 쉬웠다.
+
+VPN을 인덱스로 바로 접근
+
+하면 됐다.
+
+그런데 inverted page table은 표가 이렇게 생겼다:
+
+PFN 0 : (process A, VPN 12)  
+PFN 1 : (process B, VPN 3)  
+PFN 2 : (process A, VPN 80)  
+PFN 3 : (process C, VPN 1)  
+...
+
+이제 우리가 알고 싶은 건 보통:
+
+> "현재 프로세스의 VPN 10은 어디 있지?"
+
+인데,
+
+테이블은 PFN 기준으로 되어 있으니까  
+이걸 찾으려면:
+
+- 엔트리들을 뒤져서
+- `(현재 프로세스, VPN 10)`을 찾고
+- 그때의 PFN을 알아내야 해
+
+즉, 그냥 두면 **검색이 어려워진다.**
+
+> 공간은 아끼는데, 검색이 어려워진다
