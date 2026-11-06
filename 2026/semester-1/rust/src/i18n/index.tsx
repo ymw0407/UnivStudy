@@ -57,6 +57,7 @@ export function useLocale(): LocaleContextValue {
 // ============== Chrome strings ==============
 
 type StringKey =
+  | "nav.archive"
   | "nav.back"
   | "nav.contents"
   | "nav.prev"
@@ -71,6 +72,7 @@ type StringKey =
 
 const strings: Record<Locale, Record<StringKey, string>> = {
   ko: {
+    "nav.archive": "강의 아카이브",
     "nav.back": "← 목차로 돌아가기",
     "nav.contents": "목차",
     "nav.prev": "이전",
@@ -85,6 +87,7 @@ const strings: Record<Locale, Record<StringKey, string>> = {
     "lang.zh": "中文",
   },
   en: {
+    "nav.archive": "Lecture archive",
     "nav.back": "← Back to contents",
     "nav.contents": "Contents",
     "nav.prev": "Previous",
@@ -99,6 +102,7 @@ const strings: Record<Locale, Record<StringKey, string>> = {
     "lang.zh": "中文",
   },
   zh: {
+    "nav.archive": "课程档案",
     "nav.back": "← 返回目录",
     "nav.contents": "目录",
     "nav.prev": "上一页",

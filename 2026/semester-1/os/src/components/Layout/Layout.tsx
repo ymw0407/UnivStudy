@@ -26,7 +26,10 @@ export function Layout() {
       </MobileDrawer>
       <main className={s.mainArea}>
         <Outlet />
-        <footer className={s.footer}>© OS Book — OSTEP 기반 학습 노트</footer>
+        <footer className={s.footer}>
+          {import.meta.env.PROD && <p><a href="../">강의 아카이브</a></p>}
+          © OS Book | OSTEP 기반 학습 노트
+        </footer>
       </main>
     </div>
   );

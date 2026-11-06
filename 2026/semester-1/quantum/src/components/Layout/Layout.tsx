@@ -27,7 +27,8 @@ export function Layout() {
       <main className={s.mainArea}>
         <Outlet />
         <footer className={s.footer}>
-          © 양자컴퓨팅 입문 — 「프로그래밍으로 배우는 양자컴퓨팅」(임은진·권용경) 강의자료 기반 학습 노트
+          {import.meta.env.PROD && <p><a href="../">강의 아카이브</a></p>}
+          © 양자컴퓨팅 입문 | 「프로그래밍으로 배우는 양자컴퓨팅」(임은진·권용경) 강의자료 기반 학습 노트
         </footer>
       </main>
     </div>

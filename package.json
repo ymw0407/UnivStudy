@@ -1,0 +1,8 @@
+{
+  "name": "univ-study",
+  "private": true,
+  "packageManager": "pnpm@10.33.3",
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=1 run build && cp site/index.html dist/index.html && node scripts/check-pages.mjs"
+  }
+}

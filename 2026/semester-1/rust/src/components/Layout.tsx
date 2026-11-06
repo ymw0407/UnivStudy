@@ -36,7 +36,10 @@ export function Layout({
         )}
         {children}
       </main>
-      <footer className={s.footer}>{t("footer.tagline")}</footer>
+      <footer className={s.footer}>
+        {import.meta.env.PROD && <p><a href="../">{t("nav.archive")}</a></p>}
+        {t("footer.tagline")}
+      </footer>
     </>
   );
 }

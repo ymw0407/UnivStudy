@@ -16,6 +16,7 @@ import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 // KaTeX CSS 는 main.tsx 에서 import 한다.
 export default defineConfig({
   base: './',
+  build: { outDir: '../../../dist/quantum', emptyOutDir: true },
   plugins: [
     {
       enforce: 'pre',

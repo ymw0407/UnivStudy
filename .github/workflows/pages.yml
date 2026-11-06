@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy lecture archive
 
 on:
   push:
@@ -7,32 +7,24 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
-
+          cache-dependency-path: '2026/semester-1/*/pnpm-lock.yaml'
       - run: pnpm install --frozen-lockfile
-
       - run: pnpm build
-
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -40,6 +32,9 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

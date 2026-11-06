@@ -1,0 +1,7 @@
+packages:
+  - '2026/semester-1/*'
+
+# Keep the exact dependency versions used for each archived course.
+sharedWorkspaceLockfile: false
+onlyBuiltDependencies:
+  - esbuild

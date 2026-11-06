@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f6f0">
+  <title>강의 아카이브 | UnivStudy</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='8' fill='%23294335'/%3E%3Cpath d='M10 10v13a9 9 0 0 0 18 0V10' fill='none' stroke='white' stroke-width='4'/%3E%3C/svg%3E">
+  <style>
+    * { box-sizing: border-box; }
+    html { color-scheme: light; }
+    body { margin: 0; background: #f7f6f0; color: #202d25; font: 1rem/1.55 system-ui, sans-serif; word-break: keep-all; }
+    header, main { width: min(100% - 2.5rem, 66rem); margin-inline: auto; }
+    header { display: flex; justify-content: space-between; align-items: center; padding-block: 1.35rem; border-bottom: 1px solid #cbcec4; }
+    .brand { font-family: Georgia, serif; font-size: 1.5rem; font-weight: 700; }
+    header a { color: inherit; text-underline-offset: .25em; font-size: .9rem; }
+    main { padding-block: clamp(3rem, 8vw, 6.5rem); }
+    h1 { margin: 0; font-size: clamp(2.6rem, 6vw, 4.75rem); letter-spacing: -.075em; line-height: 1.2; }
+    h2 { margin: 3.2rem 0 1rem; font-size: 1rem; }
+    ul { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    li { display: flex; }
+    .course { width: 100%; display: flex; flex-direction: column; text-decoration: none; color: inherit; border: 1px solid #c9cdc3; background: #fffef9; }
+    .course:hover { border-color: #344d3d; }
+    a:focus-visible { outline: 3px solid #176745; outline-offset: 4px; }
+    .plate { display: grid; place-items: center; height: 8.5rem; color: var(--ink); background: var(--wash); }
+    .plate svg { width: 7rem; height: 6rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .os { --ink: #355449; --wash: #dce6d8; }
+    .quantum { --ink: #415c77; --wash: #dee8ef; }
+    .rust { --ink: #814d32; --wash: #f0dfd0; }
+    .detail { display: grid; grid-template-columns: 1fr auto; align-items: center; padding: 1.25rem; gap: .25rem .5rem; }
+    .subject { grid-column: 1 / -1; color: #505c53; font-size: .85rem; }
+    .title { font-size: 1.45rem; font-weight: 700; letter-spacing: -.035em; }
+    .arrow { color: var(--ink); font-size: 1.4rem; }
+    @media (max-width: 42rem) {
+      ul { grid-template-columns: 1fr; }
+      .course { flex-direction: row; }
+      .plate { height: auto; min-height: 6.25rem; width: 28%; }
+      .plate svg { width: 4.5rem; height: 4rem; }
+      .detail { flex: 1; padding: .9rem 1rem; align-content: center; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="brand" lang="en">UnivStudy</span>
+    <a href="https://github.com/ymw0407/UnivStudy">GitHub 저장소 <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <h1>강의 아카이브</h1>
+    <section aria-labelledby="spring-2026">
+      <h2 id="spring-2026">2026학년도 1학기</h2>
+      <ul>
+        <li><a class="course os" href="./os/">
+          <span class="plate" aria-hidden="true"><svg viewBox="0 0 120 88">
+            <rect x="36" y="21" width="48" height="46" rx="4"/><rect x="45" y="30" width="30" height="28" rx="2"/>
+            <path d="M45 21V12m10 9V12m10 9V12m10 9V12M45 67v9m10-9v9m10-9v9m10-9v9M36 30H26m10 9H26m10 10H26m10 9H26m58-28h10m-10 9h10m-10 10h10m-10 9h10"/>
+          </svg></span>
+          <span class="detail"><span class="subject">Operating Systems</span><span class="title">운영체제</span><span class="arrow" aria-hidden="true">→</span></span>
+        </a></li>
+        <li><a class="course quantum" href="./quantum/">
+          <span class="plate" aria-hidden="true"><svg viewBox="0 0 120 88">
+            <circle cx="60" cy="45" r="28"/><ellipse cx="60" cy="45" rx="28" ry="9" transform="rotate(-12 60 45)"/>
+            <path d="M60 78V9m-3 4 3-4 3 4M60 45l18-21m-6 2 6-2-1 6"/><circle cx="60" cy="45" r="2" fill="currentColor"/>
+          </svg></span>
+          <span class="detail"><span class="subject">시스템최신기술</span><span class="title">양자컴퓨팅</span><span class="arrow" aria-hidden="true">→</span></span>
+        </a></li>
+        <li><a class="course rust" href="./rust/">
+          <span class="plate" aria-hidden="true"><svg viewBox="0 0 120 88">
+            <path d="M43 18c-8 0-10 4-10 10v7c0 6-3 9-9 9 6 0 9 3 9 9v7c0 6 2 10 10 10m34-52c8 0 10 4 10 10v7c0 6 3 9 9 9-6 0-9 3-9 9v7c0 6-2 10-10 10"/>
+            <path d="M50 50l7-12m6 12 7-12"/>
+          </svg></span>
+          <span class="detail"><span class="subject">시스템최신기술</span><span class="title" lang="en">Rust</span><span class="arrow" aria-hidden="true">→</span></span>
+        </a></li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
