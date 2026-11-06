@@ -1,0 +1,179 @@
+지금까지는 큐비트 한 개였다. 하지만 1부의 half adder는 큐비트가 4개였다. 큐비트 여러
+개의 상태를 하나의 벡터로 묶는 연산이 **텐서곱(tensor product)** 이다.
+
+## 여러 큐비트 = 텐서곱 공간
+
+> 두 개 이상의 계(system)가 있으면, 각 계의 양자 상태는 각자의 벡터 공간에 속한다.
+> **전체 계의 벡터 공간은 개별 공간들의 텐서곱** `V ⊗ W` 으로 표현된다.
+
+`V` 의 기저가 `{|vᵢ⟩}`, `W` 의 기저가 `{|wⱼ⟩}` 라면, `V ⊗ W` 의 기저는 둘을 짝지은
+`{ |vᵢ⟩ ⊗ |wⱼ⟩ }` 이다. 가장 중요한 결과는 차원이다.
+
+$$
+\dim(V \otimes W) = (\dim V) \times (\dim W)
+$$
+
+> **차원이 곱셈으로 커진다.** 큐비트 1개는 2차원, 2개는 `2×2 = 4`차원, `n`개는 `2ⁿ`
+> 차원. 큐비트가 늘면 상태 공간이 **지수적으로** 커진다 — 이것이 양자컴퓨팅이 강력한
+> 근본 이유다.
+
+<Figure
+  caption="큐비트가 하나 늘 때마다 상태 공간의 차원은 두 배로 커진다. 1·2·3·4·5큐비트는 각각 2·4·8·16·32 차원 — 막대(작은 사각형 개수)로 직접 비교할 수 있다. 50큐비트 정도면 차원이 약 10¹⁵, 고전 컴퓨터 메모리로는 담을 수도 없는 규모가 된다."
+>
+  <svg viewBox="0 0 540 270" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="큐비트 개수에 따른 상태 공간 차원 증가" style={{ width: '100%', maxWidth: '660px', height: 'auto' }}>
+    <defs>
+      <pattern id="dim-sq" x="0" y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+        <rect width="8" height="8" fill="#a78bfa" rx="1" />
+      </pattern>
+    </defs>
+    <text x="270" y="20" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">큐비트 n 개 → 2ⁿ 차원 (지수적으로 커진다)</text>
+    <text x="20" y="50" fontSize="11" fill="currentColor" opacity="0.85">큐비트 1개</text>
+    <rect x="110" y="42" width="20" height="8" fill="url(#dim-sq)" />
+    <text x="495" y="50" fontSize="11" fill="currentColor" opacity="0.85" textAnchor="end">2¹ = 2 차원</text>
+    <text x="20" y="80" fontSize="11" fill="currentColor" opacity="0.85">큐비트 2개</text>
+    <rect x="110" y="72" width="40" height="8" fill="url(#dim-sq)" />
+    <text x="495" y="80" fontSize="11" fill="currentColor" opacity="0.85" textAnchor="end">2² = 4 차원</text>
+    <text x="20" y="110" fontSize="11" fill="currentColor" opacity="0.85">큐비트 3개</text>
+    <rect x="110" y="102" width="80" height="8" fill="url(#dim-sq)" />
+    <text x="495" y="110" fontSize="11" fill="currentColor" opacity="0.85" textAnchor="end">2³ = 8 차원</text>
+    <text x="20" y="140" fontSize="11" fill="currentColor" opacity="0.85">큐비트 4개</text>
+    <rect x="110" y="132" width="160" height="8" fill="url(#dim-sq)" />
+    <text x="495" y="140" fontSize="11" fill="currentColor" opacity="0.85" textAnchor="end">2⁴ = 16 차원</text>
+    <text x="20" y="170" fontSize="11" fill="currentColor" opacity="0.85">큐비트 5개</text>
+    <rect x="110" y="162" width="320" height="8" fill="url(#dim-sq)" />
+    <text x="495" y="170" fontSize="11" fill="currentColor" opacity="0.85" textAnchor="end">2⁵ = 32 차원</text>
+    <line x1="20" y1="195" x2="520" y2="195" stroke="currentColor" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.25" />
+    <text x="20" y="222" fontSize="11" fill="currentColor" opacity="0.85">큐비트 50개</text>
+    <text x="110" y="222" fontSize="13" fontWeight="700" fill="#a78bfa">2⁵⁰ ≈ 10¹⁵ 차원</text>
+    <text x="20" y="250" fontSize="10" fill="currentColor" opacity="0.7">↑ 한 양자 상태가 가진 정보량 — 고전 컴퓨터 메모리로는 담을 수 없는 규모</text>
+  </svg>
+</Figure>
+
+표기는 `|vᵢ⟩ ⊗ |wⱼ⟩` 를 줄여서 `|vᵢ⟩|wⱼ⟩` 또는 `|vᵢ, wⱼ⟩` 로 쓴다.
+
+## Kronecker 곱 — 텐서곱을 실제로 계산하기
+
+텐서곱을 벡터·행렬의 숫자로 실제 계산하는 방법이 **Kronecker 곱(크로네커 곱)** 이다.
+
+### 벡터의 Kronecker 곱
+
+열벡터 `α = [α₁; …; αₙ]` 와 `β = [β₁; …; βₘ]` 의 Kronecker 곱은, **`α` 의 각 원소에
+`β` 벡터 전체를 곱해서 세로로 쭉 이어 붙인** 것이다.
+
+$$
+\alpha \otimes \beta = \begin{bmatrix} \alpha_1\,\beta \\ \alpha_2\,\beta \\ \vdots \\ \alpha_n\,\beta \end{bmatrix} = \begin{bmatrix} \alpha_1\beta_1 \\ \vdots \\ \alpha_1\beta_m \\ \alpha_2\beta_1 \\ \vdots \\ \alpha_n\beta_m \end{bmatrix}
+$$
+
+원소 `n`개와 `m`개를 곱하면 `n·m`개짜리 벡터가 나온다.
+
+### 행렬의 Kronecker 곱
+
+행렬도 마찬가지다. `A ⊗ B` 는 `A` 의 각 원소 $a_{ij}$ 를 $a_{ij}\cdot B$ (행렬 $B$ 전체에
+그 수를 곱한 블록)로 바꾼 큰 행렬이다. $A$ 가 $n\times n$, $B$ 가 $m\times m$ 이면
+$A \otimes B$ 는 $(nm)\times(nm)$.
+
+$$
+A \otimes B = \begin{bmatrix} a_{11}B & a_{12}B & \cdots & a_{1n}B \\ a_{21}B & a_{22}B & \cdots & a_{2n}B \\ \vdots & \vdots & \ddots & \vdots \\ a_{n1}B & a_{n2}B & \cdots & a_{nn}B \end{bmatrix}
+$$
+
+작은 예로 확인하자. $A = \begin{bmatrix} a & b \\ c & d \end{bmatrix}$, $B$ 가 $2\times2$
+라면, 각 칸이 $B$ 블록으로 부풀어 $4\times4$ 가 된다.
+
+$$
+A \otimes B = \begin{bmatrix} a\,B & b\,B \\ c\,B & d\,B \end{bmatrix} = \begin{bmatrix} aB_{11} & aB_{12} & bB_{11} & bB_{12} \\ aB_{21} & aB_{22} & bB_{21} & bB_{22} \\ cB_{11} & cB_{12} & dB_{11} & dB_{12} \\ cB_{21} & cB_{22} & dB_{21} & dB_{22} \end{bmatrix}
+$$
+
+> 규칙은 한 줄이다: **왼쪽 행렬의 각 숫자 자리에, 오른쪽 행렬 통째를 그 숫자배 해서 끼워
+> 넣는다.** 9장에서 $Y \otimes X$ 를 이 방식으로 실제로 계산해 본다.
+
+### 핵심 규칙
+
+Kronecker 곱의 가장 쓸모 있는 성질:
+
+$$
+(A \otimes B)(\alpha \otimes \beta) = (A\alpha) \otimes (B\beta)
+$$
+
+> "묶인 상태에 묶인 연산을 하면, 각 부분에 따로 연산한 결과를 다시 묶은 것과 같다." 한
+> 큐비트에 게이트를 거는 것이 다른 큐비트에 영향을 안 주는 이유가 이 규칙이다.
+
+## 2큐비트 상태를 벡터로
+
+`|0⟩ = [1;0]`, `|1⟩ = [0;1]` 로부터 2큐비트의 계산 기저 네 개를 만든다. 큐비트 순서는
+`q₁q₀` (왼쪽이 q1, 오른쪽이 q0).
+
+$$
+\begin{aligned}
+|00\rangle &= |0\rangle \otimes |0\rangle = \begin{bmatrix} 1 \\ 0 \end{bmatrix} \otimes \begin{bmatrix} 1 \\ 0 \end{bmatrix} = \begin{bmatrix} 1 \\ 0 \\ 0 \\ 0 \end{bmatrix} \\[3pt]
+|01\rangle &= |0\rangle \otimes |1\rangle = \begin{bmatrix} 1 \\ 0 \end{bmatrix} \otimes \begin{bmatrix} 0 \\ 1 \end{bmatrix} = \begin{bmatrix} 0 \\ 1 \\ 0 \\ 0 \end{bmatrix} \\[3pt]
+|10\rangle &= |1\rangle \otimes |0\rangle = \begin{bmatrix} 0 \\ 1 \end{bmatrix} \otimes \begin{bmatrix} 1 \\ 0 \end{bmatrix} = \begin{bmatrix} 0 \\ 0 \\ 1 \\ 0 \end{bmatrix} \\[3pt]
+|11\rangle &= |1\rangle \otimes |1\rangle = \begin{bmatrix} 0 \\ 1 \end{bmatrix} \otimes \begin{bmatrix} 0 \\ 1 \end{bmatrix} = \begin{bmatrix} 0 \\ 0 \\ 0 \\ 1 \end{bmatrix}
+\end{aligned}
+$$
+
+`|01⟩` 의 계산을 손으로 따라가 보자. `α = [1;0]`, `β = [0;1]` 이면,
+`α ⊗ β = [ 1·[0;1] ; 0·[0;1] ] = [ 0; 1; 0; 0 ]`. 두 번째 자리만 1 — 이진수 `01` 이
+`4`개 칸 중 인덱스 1번을 가리키는 것과 정확히 일치한다.
+
+<Figure
+  src="/figures/ch08-2qubit-basis.png"
+  caption="2큐비트 계산 기저 네 개. |00⟩·|01⟩·|10⟩·|11⟩ 이 각각 |0⟩·|1⟩ 의 Kronecker 곱으로 만들어지는 4차원 단위 벡터다."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+그리고 임의의 2큐비트 상태는 이 네 기저의 선형 결합이다.
+
+$$
+|\psi\rangle = c_{00}|00\rangle + c_{01}|01\rangle + c_{10}|10\rangle + c_{11}|11\rangle = \begin{bmatrix} c_{00} \\ c_{01} \\ c_{10} \\ c_{11} \end{bmatrix}
+$$
+
+<Callout kind="note">
+`[0]`, `[0;0]`, `[1;0;0;0]`, `|0⟩⊗|0⟩` 중에서 2큐비트 상태 `|00⟩` 은 어느 것일까?
+**`[1;0;0;0]` = `|0⟩⊗|0⟩`** 이다. 2큐비트는 반드시 `2×2 = 4`차원 벡터여야 하므로 칸이
+4개여야 하고, `|00⟩` 은 그중 첫 칸이 1이다.
+</Callout>
+
+## 1부 half adder를 벡터로 다시 보기
+
+이제 1부의 4큐비트 회로를 완전히 벡터로 적을 수 있다. 4큐비트의 계산 기저는
+`2⁴ = 16` 개의 벡터다 — `|0000⟩, |0001⟩, …, |1111⟩`. 각각 16칸 중 한 칸만 1인 벡터다.
+
+**시작 상태** `|ψ₀⟩` 는 네 큐비트가 모두 `|0⟩` 인 텐서곱:
+
+$$
+|\psi_0\rangle = |0000\rangle = |0\rangle \otimes |0\rangle \otimes |0\rangle \otimes |0\rangle = \begin{bmatrix} 1 & 0 & 0 & \cdots & 0 \end{bmatrix}^{\mathsf{T}} \quad \text{(16칸 중 첫 칸만 1)}
+$$
+
+**H 두 개를 건 뒤** `|ψ₁⟩` — 3장에서 `½(|0000⟩+|0001⟩+|0010⟩+|0011⟩)` 라고 쓴 그
+상태는, 16칸짜리 벡터로는:
+
+$$
+|\psi_1\rangle = \begin{bmatrix} 0.5 & 0.5 & 0.5 & 0.5 & 0 & 0 & \cdots & 0 \end{bmatrix}^{\mathsf{T}} \quad \text{(앞 네 칸이 0.5, 나머지 12칸 0)}
+$$
+
+확인: `4 × |0.5|² = 4 × 0.25 = 1`. ✓ 단위 벡터다.
+
+<Figure
+  src="/figures/ch08-4qubit-half-adder.png"
+  caption="half adder 회로의 4큐비트 상태. 계산 기저는 |0000⟩~|1111⟩ 의 16개 벡터이고, |ψ₀⟩ = |0000⟩ 에 H 두 개를 걸면 |ψ₁⟩ 은 앞 네 칸이 0.5인 16차원 벡터가 된다."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+> 1부에서 "네 덧셈을 한 번에"라고 그림으로 말한 것이, 2부에서는 정확히 **16차원 단위
+> 벡터 하나** 다. 양자 게이트는 이 벡터에 곱해지는 `16×16` 행렬이고, 그 행렬은 작은
+> 게이트들의 Kronecker 곱으로 조립된다.
+
+<Callout kind="tip">
+큐비트 `n`개 → `2ⁿ` 차원. 큐비트 50개면 `2⁵⁰ ≈ 10¹⁵` 차원 벡터다. 고전 컴퓨터로는
+이 벡터를 메모리에 다 담는 것조차 사실상 불가능하다. 양자컴퓨터는 이 거대한 공간에서
+직접 계산한다 — 텐서곱이 그 거대함의 출처다.
+</Callout>
+
+<Callout kind="summary">
+- 큐비트 여러 개의 상태 공간 = 개별 공간의 **텐서곱** `V ⊗ W`
+- **차원은 곱해진다**: 큐비트 `n`개 → `2ⁿ` 차원 (지수적 증가)
+- **Kronecker 곱** 으로 실제 계산: `α⊗β` 는 `α` 각 원소에 `β` 전체를 곱해 이어 붙임
+- 핵심 규칙: `(A⊗B)(α⊗β) = Aα ⊗ Bβ` — 각 부분에 따로 적용
+- `n`큐비트 계산 기저 = `2ⁿ` 개의 "한 칸만 1" 벡터
+- 다음 장: 이 벡터들에 곱해지는 **행렬** — 양자 연산의 정체
+</Callout>

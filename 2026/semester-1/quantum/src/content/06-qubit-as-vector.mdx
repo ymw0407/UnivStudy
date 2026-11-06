@@ -1,0 +1,183 @@
+표기법이 준비됐으니, 이제 진짜 큐비트를 벡터로 적는다. 이 장이 1부와 2부를 잇는
+다리다 — 1부에서 그림으로 본 `|0⟩`, `|1⟩`, 중첩이 전부 구체적인 숫자 열벡터가 된다.
+
+## |0⟩ 과 |1⟩ 의 정체
+
+1큐비트의 두 기본 상태는 다음 두 열벡터로 정한다.
+
+$$
+|0\rangle = \begin{bmatrix} 1 \\ 0 \end{bmatrix}, \qquad |1\rangle = \begin{bmatrix} 0 \\ 1 \end{bmatrix}
+$$
+
+이게 전부다. `|0⟩`은 "위 칸이 1, 아래 칸이 0인 벡터", `|1⟩`은 그 반대. 1부에서 막연히
+"0 상태/1 상태"라 부르던 것의 실체다.
+
+<Figure
+  src="/figures/ch06-qubit-0-1.png"
+  caption="1큐비트 상태 |0⟩ = [1;0] 과 |1⟩ = [0;1]. 왼쪽은 |0⟩, 오른쪽은 X 게이트로 뒤집은 |1⟩. Statevector 패널의 막대 위치와 열벡터가 정확히 대응한다."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+<Callout kind="note">
+**왜 하필 이 두 벡터인가?** 원소 2개짜리 벡터는 무수히 많다 — `[0]`, `[0;0]`, `[1;0]`, …
+그중 `[1;0]` 과 `[0;1]` 을 1큐비트의 "눈금"으로 **약속** 한 것이다. 길이가 1이고(단위
+벡터), 서로 직교하기 때문에 좋은 눈금이 된다. (이 약속을 7장에서 "계산 기저"라 부른다.)
+</Callout>
+
+## 일반적인 1큐비트 상태
+
+`|0⟩`, `|1⟩` 을 정했으니, **임의의** 1큐비트 상태는 둘의 선형 결합으로 적힌다.
+
+$$
+|\psi\rangle = \begin{bmatrix} \alpha \\ \beta \end{bmatrix} = \alpha \begin{bmatrix} 1 \\ 0 \end{bmatrix} + \beta \begin{bmatrix} 0 \\ 1 \end{bmatrix} = \alpha\,|0\rangle + \beta\,|1\rangle
+$$
+
+`α`, `β` 는 복소수다. 열벡터로 보든 `α|0⟩ + β|1⟩` 로 보든 같은 것이다 — 그냥 표기만
+다르다.
+
+### 예시 1: |0⟩ 그 자체
+
+X 게이트를 걸지 않은 큐비트는 그대로 `|0⟩` 이다.
+
+$$
+|\psi\rangle = \begin{bmatrix} 1 + 0i \\ 0 + 0i \end{bmatrix} = \begin{bmatrix} 1 \\ 0 \end{bmatrix} = 1\cdot|0\rangle + 0\cdot|1\rangle
+$$
+
+`|0⟩` 의 계수는 1, `|1⟩` 의 계수는 0.
+
+### 예시 2: 상태 [ 0 ; i ]
+
+Y 게이트를 거치면 이런 상태가 나온다.
+
+$$
+|\psi\rangle = \begin{bmatrix} 0 + 0i \\ 0 + 1i \end{bmatrix} = \begin{bmatrix} 0 \\ i \end{bmatrix} = i\,|1\rangle = 0\cdot|0\rangle + i\cdot|1\rangle
+$$
+
+계수가 복소수(`i`)여도 전혀 문제없다. 4장에서 복소수를 준비한 이유가 이것이다.
+
+## 확률진폭, 다시 — 이번엔 정확하게
+
+3장에서 "계수의 절댓값 제곱이 확률"이라 했다. 이제 그 계수를 벡터의 원소로 정확히 짚을 수
+있다. `|ψ⟩ = α|0⟩ + β|1⟩` 를 측정하면:
+
+- `|0⟩` 이 관측될 확률 = `|α|²`
+- `|1⟩` 이 관측될 확률 = `|β|²`
+
+그래서 `α`, `β` 를 **확률진폭(probability amplitude)** 이라 부른다. 그리고 확률의 합이
+1이어야 하므로:
+
+$$
+|\alpha|^2 + |\beta|^2 = 1
+$$
+
+예시 2의 `[0; i]` 를 보자. `|0|² + |i|² = 0 + 1 = 1`. ✓ 측정하면 100% 확률로 `1` 이
+나온다.
+
+<Figure
+  caption="진폭 α, β 와 측정 확률 |α|², |β|² 의 관계. 왼쪽: 큐비트가 |0⟩ 상태 → α=1, β=0 → 측정 시 100% 0. 가운데: |+⟩ 중첩 → α=β=1/√2 → 50:50. 오른쪽: 임의의 중첩 → |α|² + |β|² = 1 (확률 합)."
+>
+  <svg viewBox="0 0 540 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="여러 1큐비트 상태의 진폭 막대와 측정 확률 막대" style={{ width: '100%', maxWidth: '640px', height: 'auto' }}>
+    <text x="90" y="22" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">|0⟩ 상태</text>
+    <line x1="30" y1="170" x2="160" y2="170" stroke="currentColor" strokeWidth="1.2" opacity="0.5" />
+    <line x1="30" y1="80" x2="160" y2="80" stroke="currentColor" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.2" />
+    <rect x="50" y="80" width="32" height="90" fill="#a78bfa" rx="2" />
+    <rect x="108" y="170" width="32" height="0" fill="#a78bfa" rx="2" />
+    <text x="66" y="186" fontSize="10" fill="currentColor" opacity="0.85" textAnchor="middle">|0⟩</text>
+    <text x="124" y="186" fontSize="10" fill="currentColor" opacity="0.4" textAnchor="middle">|1⟩</text>
+    <text x="95" y="208" fontSize="10" fill="currentColor" opacity="0.75" textAnchor="middle">|α|²=1, |β|²=0</text>
+
+    <line x1="190" y1="20" x2="190" y2="220" stroke="currentColor" strokeWidth="1" opacity="0.2" />
+
+    <text x="270" y="22" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">|+⟩ 중첩</text>
+    <line x1="210" y1="170" x2="340" y2="170" stroke="currentColor" strokeWidth="1.2" opacity="0.5" />
+    <line x1="210" y1="80" x2="340" y2="80" stroke="currentColor" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.2" />
+    <rect x="230" y="125" width="32" height="45" fill="#a78bfa" rx="2" />
+    <rect x="288" y="125" width="32" height="45" fill="#a78bfa" rx="2" />
+    <text x="246" y="186" fontSize="10" fill="currentColor" opacity="0.85" textAnchor="middle">|0⟩</text>
+    <text x="304" y="186" fontSize="10" fill="currentColor" opacity="0.85" textAnchor="middle">|1⟩</text>
+    <text x="275" y="208" fontSize="10" fill="currentColor" opacity="0.75" textAnchor="middle">|α|²=½, |β|²=½</text>
+
+    <line x1="370" y1="20" x2="370" y2="220" stroke="currentColor" strokeWidth="1" opacity="0.2" />
+
+    <text x="455" y="22" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">임의의 중첩</text>
+    <line x1="390" y1="170" x2="520" y2="170" stroke="currentColor" strokeWidth="1.2" opacity="0.5" />
+    <line x1="390" y1="80" x2="520" y2="80" stroke="currentColor" strokeWidth="0.8" strokeDasharray="3 4" opacity="0.2" />
+    <rect x="410" y="98" width="32" height="72" fill="#a78bfa" rx="2" />
+    <rect x="468" y="152" width="32" height="18" fill="#a78bfa" rx="2" />
+    <text x="426" y="186" fontSize="10" fill="currentColor" opacity="0.85" textAnchor="middle">|0⟩</text>
+    <text x="484" y="186" fontSize="10" fill="currentColor" opacity="0.85" textAnchor="middle">|1⟩</text>
+    <text x="455" y="208" fontSize="10" fill="currentColor" opacity="0.75" textAnchor="middle">|α|²=0.8, |β|²=0.2</text>
+
+    <text x="20" y="85" fontSize="9" fill="currentColor" opacity="0.55" textAnchor="end">1</text>
+    <text x="20" y="174" fontSize="9" fill="currentColor" opacity="0.55" textAnchor="end">0</text>
+    <text x="265" y="223" fontSize="9" fill="currentColor" opacity="0.55" textAnchor="middle">— 어떤 상태든 두 막대 높이의 합은 항상 1 —</text>
+  </svg>
+</Figure>
+
+<Callout kind="warn">
+**진폭은 확률이 아니다.** 진폭 `α` 는 복소수일 수 있고, 음수일 수도 있다. 확률은 그것의
+**절댓값 제곱** `|α|²` 이다. `[0; i]` 에서 `|1⟩` 의 진폭은 `i` 지만, 확률은 `|i|² = 1`.
+진폭이 복소수라는 사실이 양자 간섭(干涉)을 가능하게 하는 핵심인데, 그 이야기는 이 입문
+노트의 범위를 넘는다.
+</Callout>
+
+## 중첩 상태를 벡터로
+
+3장에서 H 게이트가 만든 중첩도 이제 구체적인 벡터다.
+
+**`|+⟩` 상태** — `|0⟩` 에 H를 건 결과:
+
+$$
+|\psi\rangle = \begin{bmatrix} 1/\sqrt{2} \\ 1/\sqrt{2} \end{bmatrix} = \tfrac{1}{\sqrt{2}}\,|0\rangle + \tfrac{1}{\sqrt{2}}\,|1\rangle = |{+}\rangle
+$$
+
+확인: `|1/√2|² + |1/√2|² = 1/2 + 1/2 = 1`. ✓ 측정하면 0과 1이 각각 50%.
+
+<Figure
+  src="/figures/ch06-superposition.png"
+  caption="|0⟩ 에 H 게이트를 건 중첩 상태 |+⟩ = [1/√2; 1/√2]. Statevector 막대 두 개가 똑같은 높이 0.707(=1/√2)로 서 있다 — 측정하면 0과 1이 각각 50%."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+**복소 계수 중첩** — Y 게이트 뒤 H를 건 것 같은 상태:
+
+$$
+|\psi\rangle = \begin{bmatrix} i/\sqrt{2} \\ -i/\sqrt{2} \end{bmatrix} = \tfrac{i}{\sqrt{2}}\,|0\rangle - \tfrac{i}{\sqrt{2}}\,|1\rangle
+$$
+
+확인: `|i/√2|² + |−i/√2|² = 1/2 + 1/2 = 1`. ✓ 이것도 0과 1이 각각 50%다 — 확률은
+같지만 진폭은 다른, 분명히 다른 상태다.
+
+## |0⟩ 과 |1⟩ 은 선형 독립이다
+
+`|0⟩` 과 `|1⟩` 을 1큐비트의 눈금으로 쓸 수 있는 결정적 이유: 둘은 **선형 독립(linearly
+independent)** 이다.
+
+> 벡터 `v₁, …, vₙ` 에 대해 `z₁|v₁⟩ + … + zₙ|vₙ⟩ = 0` 을 만족하는 **0이 아닌** 복소수
+> 계수가 존재하면 → **선형 종속(dependent)**.
+> 그런 계수가 **존재하지 않으면** (즉 모든 계수가 0일 때만 0이 되면) → **선형 독립**.
+
+`|0⟩` 과 `|1⟩` 의 경우: `α|0⟩ + β|1⟩ = [α; β] = [0;0]` 이 되려면 `α = β = 0` 밖에 없다.
+다른 방법이 없다. 그래서 둘은 선형 독립이다. 다르게 말하면:
+
+$$
+\begin{bmatrix} 1 \\ 0 \end{bmatrix} \;\ne\; \alpha \begin{bmatrix} 0 \\ 1 \end{bmatrix} \qquad (\text{어떤 } \alpha \text{ 로도 불가능})
+$$
+
+`|0⟩` 을 아무리 스칼라배 해도 `|1⟩` 이 안 된다 — 둘은 서로를 대신할 수 없는 **독립적인
+방향** 이다.
+
+<Callout kind="tip">
+선형 독립이 왜 중요한가? 독립인 벡터 두 개가 있으면, 2차원 공간의 **모든** 벡터를 그 둘의
+선형 결합으로 적을 수 있다. `|ψ⟩ = α|0⟩ + β|1⟩` 이 항상 가능한 것은 `|0⟩`, `|1⟩` 이 선형
+독립이기 때문이다. 이 "독립인 벡터들로 공간 전체를 덮는다"는 생각이 다음 장 **기저** 의
+핵심이다.
+</Callout>
+
+<Callout kind="summary">
+- `|0⟩ = [1;0]`, `|1⟩ = [0;1]` — 1큐비트의 두 눈금 벡터
+- 모든 1큐비트 상태: `|ψ⟩ = α|0⟩ + β|1⟩` (`α, β` 복소수)
+- `α, β` = **확률진폭**, 측정 확률은 `|α|²`, `|β|²`, 그리고 `|α|² + |β|² = 1`
+- `|0⟩` 과 `|1⟩` 은 **선형 독립** — 그래서 둘로 2차원 공간 전체를 적을 수 있다
+- 다음 장: 같은 벡터를 다른 눈금(기저)으로도 적을 수 있다는 것
+</Callout>

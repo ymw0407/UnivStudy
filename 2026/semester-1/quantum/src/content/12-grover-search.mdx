@@ -1,0 +1,216 @@
+마지막 장은 가장 유명한 양자 알고리즘 중 하나 — **Grover 검색** 이다. 11장의 골격(중첩 →
+위상 → 간섭)을 그대로 쓰되, "원하는 답의 진폭만 키운다"는 4장의 아이디어를 본격적으로
+실현한다.
+
+## 정렬되지 않은 검색 문제
+
+$N = 2^n$ 개의 항목 중에서, 특정 조건을 만족하는 **단 하나의 정답** $w$ 를 찾고 싶다.
+조건은 함수로 주어진다.
+
+$$
+f(x) = \begin{cases} 1 & x = w \;(\text{정답}) \\ 0 & x \ne w \end{cases}
+$$
+
+> 전화번호부처럼 **정렬돼 있지 않은** 목록에서 이름 하나를 찾는 상황. 단서가 없으니
+> 하나씩 확인하는 수밖에 없다.
+
+고전 컴퓨터로는 평균 $N/2$ 번, 최악엔 $N$ 번 확인해야 한다 — $O(N)$. Grover 는 이걸
+**$O(\sqrt{N})$** 으로 줄인다. $N$ 이 100만이면 고전은 ~100만 번, Grover 는 ~1000번.
+
+<Figure
+  src="/figures/ch12-grover-overview.png"
+  caption="Grover 알고리즘 개요. n큐비트를 H 로 모두 균등 중첩(|ψ₀⟩, 모든 항 진폭 동일)으로 만든 뒤, 'Grover 반복'을 √N 번 돌리면 정답 w 의 진폭만 크게 솟아오른다(|ψₖ⟩). 그 상태를 측정하면 높은 확률로 w."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+## 출발: 균등 중첩
+
+먼저 $n$개 큐비트 전부에 H 를 걸어 **모든 $N$개 항을 똑같은 진폭** 으로 만든다.
+
+$$
+|s\rangle = H^{\otimes n}|0\rangle^{\otimes n} = \tfrac{1}{\sqrt{N}}\sum_{x \in \{0,1\}^n} |x\rangle
+$$
+
+이 상태에서는 정답 $w$ 든 오답이든 측정 확률이 똑같이 $1/N$. 아직 아무 정보도 안 썼다.
+
+이제 정답 $|w\rangle$ 와, 정답을 뺀 나머지를 모은 $|s'\rangle$ 두 방향으로 분해하면:
+
+$$
+|s\rangle = \sin\theta\,|w\rangle + \cos\theta\,|s'\rangle, \qquad \sin\theta = \langle w | s \rangle = \tfrac{1}{\sqrt{N}}
+$$
+
+$|s\rangle$ 은 정답 방향 $|w\rangle$ 에서 아주 살짝(각도 $\theta$ 만큼) 기울어 있을 뿐이다.
+Grover 의 목표는 이 벡터를 $|w\rangle$ 쪽으로 **회전** 시키는 것.
+
+## Grover 반복 = 두 번의 반사
+
+한 번의 Grover 반복은 두 단계로 이루어진다. 둘 다 **반사(reflection)** 다.
+
+### ① 오라클 $V_f$ — 정답의 위상을 뒤집는다
+
+11장의 위상 킥백을 그대로 쓴다. 오라클은 정답 $|w\rangle$ 의 **부호만** 뒤집는다.
+
+$$
+V_f\,|x\rangle = (-1)^{f(x)}|x\rangle = \begin{cases} -|x\rangle & x = w \\ \;\;\,|x\rangle & x \ne w \end{cases}
+$$
+
+기하적으로는 $|s\rangle$ 을 $|s'\rangle$ 축에 대해 뒤집는 **반사** 다. $|w\rangle$ 성분의
+부호가 음수가 된다.
+
+<Figure
+  src="/figures/ch12-oracle-reflection.png"
+  caption="오라클 반사. 정답 |w⟩ 의 진폭만 부호를 뒤집어(아래 막대그래프의 음수 막대) |s⟩ 를 |s'⟩ 축에 대해 반사시킨다. |w⟩ 가 뭔지 직접 몰라도 위상 킥백으로 구현 가능."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+### ② 확산기(diffuser) $2|s\rangle\langle s| - I$ — 평균에 대해 뒤집는다
+
+두 번째는 **평균 진폭에 대한 반사** 다. 식으로는 $2|s\rangle\langle s| - I$ (벡터 외적
+$|s\rangle\langle s|$ 로 만든 행렬). 이는 $|s\rangle$ 축에 대한 반사다.
+
+<Figure
+  src="/figures/ch12-diffuser.png"
+  caption="확산기(Householder reflection). 오라클로 반사된 |φ₁⟩ 를 다시 |s⟩ 축에 대해 반사하면, 결과 |ψ₁⟩ 는 처음보다 |w⟩ 쪽으로 2θ 만큼 회전한 상태가 된다. 정답 진폭이 커진다."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+> **두 반사 = 회전.** 오라클 반사(축 $|s'\rangle$)와 확산기 반사(축 $|s\rangle$)를
+> 연달아 하면, 전체적으로 상태 벡터가 $|w\rangle$ 쪽으로 **$2\theta$ 만큼 회전** 한다.
+> 정답 방향 성분이 그만큼 커진다.
+
+### 식 전체 유도 — 한 번의 Grover 반복
+
+"두 반사 = 회전" 을 손으로 직접 확인해 본다. 모든 계산은 $\{|w\rangle, |s'\rangle\}$
+이라는 2차원 정규직교 기저 안에서 일어난다 (5장 내적 + 7장 기저). 시작 상태:
+
+$$
+|s\rangle = \sin\theta\,|w\rangle + \cos\theta\,|s'\rangle
+$$
+
+#### ① 오라클 반사 — $V_f$ 적용
+
+$V_f$ 는 $|w\rangle$ 의 부호만 뒤집고 $|s'\rangle$ 는 그대로 둔다 ($|s'\rangle$ 안에는
+$|w\rangle$ 가 없으므로).
+
+$$
+\begin{aligned}
+|\phi_1\rangle = V_f\,|s\rangle &= V_f\bigl(\sin\theta\,|w\rangle + \cos\theta\,|s'\rangle\bigr) \\
+&= \sin\theta\,V_f|w\rangle + \cos\theta\,V_f|s'\rangle \\
+&= -\sin\theta\,|w\rangle + \cos\theta\,|s'\rangle
+\end{aligned}
+$$
+
+기하적으로 $|s'\rangle$ 축에 대한 반사 — $|w\rangle$ 성분만 부호가 바뀐다.
+
+#### ② 확산기 — $D_s = 2|s\rangle\langle s| - I$ 적용
+
+$D_s$ 를 $|\phi_1\rangle$ 에 적용한다. 분배 + 내적 한 줄로:
+
+$$
+\begin{aligned}
+|\psi_1\rangle &= D_s\,|\phi_1\rangle = \bigl(2|s\rangle\langle s| - I\bigr)\,|\phi_1\rangle \\
+&= 2|s\rangle\,\langle s|\phi_1\rangle \;-\; |\phi_1\rangle
+\end{aligned}
+$$
+
+먼저 내적 $\langle s|\phi_1\rangle$ 을 계산. $|s\rangle = \sin\theta\,|w\rangle + \cos\theta\,|s'\rangle$
+의 bra 는 $\langle s| = \sin\theta\,\langle w| + \cos\theta\,\langle s'|$ (실수 계수이니
+켤레는 변화 없음). 직교성 $\langle w|w\rangle = \langle s'|s'\rangle = 1$,
+$\langle w|s'\rangle = 0$ 을 쓰면:
+
+$$
+\begin{aligned}
+\langle s|\phi_1\rangle &= \bigl(\sin\theta\,\langle w| + \cos\theta\,\langle s'|\bigr)\bigl(-\sin\theta\,|w\rangle + \cos\theta\,|s'\rangle\bigr) \\
+&= -\sin^2\theta\,\langle w|w\rangle + \cos^2\theta\,\langle s'|s'\rangle + 0 \\
+&= \cos^2\theta - \sin^2\theta \\
+&= \cos 2\theta
+\end{aligned}
+$$
+
+(마지막은 삼각함수 배각 공식 $\cos 2\theta = \cos^2\theta - \sin^2\theta$.)
+
+이제 본식에 대입:
+
+$$
+\begin{aligned}
+|\psi_1\rangle &= 2\cos 2\theta\,|s\rangle - |\phi_1\rangle \\
+&= 2\cos 2\theta\,\bigl(\sin\theta\,|w\rangle + \cos\theta\,|s'\rangle\bigr) - \bigl(-\sin\theta\,|w\rangle + \cos\theta\,|s'\rangle\bigr) \\
+&= \bigl(2\cos 2\theta\,\sin\theta + \sin\theta\bigr)|w\rangle + \bigl(2\cos 2\theta\,\cos\theta - \cos\theta\bigr)|s'\rangle
+\end{aligned}
+$$
+
+#### ③ 삼각함수 정리 — $\sin 3\theta$, $\cos 3\theta$ 가 나온다
+
+$|w\rangle$ 계수를 정리. $\cos 2\theta = 1 - 2\sin^2\theta$ 를 쓰면:
+
+$$
+\begin{aligned}
+2\cos 2\theta\,\sin\theta + \sin\theta &= \sin\theta\,(2\cos 2\theta + 1) \\
+&= \sin\theta\,\bigl(2(1 - 2\sin^2\theta) + 1\bigr) \\
+&= \sin\theta\,(3 - 4\sin^2\theta) \\
+&= 3\sin\theta - 4\sin^3\theta \\
+&= \sin 3\theta
+\end{aligned}
+$$
+
+(마지막은 삼각함수 삼배각 공식.) 같은 방식으로 $|s'\rangle$ 계수:
+
+$$
+\begin{aligned}
+2\cos 2\theta\,\cos\theta - \cos\theta &= \cos\theta\,(2\cos 2\theta - 1) \\
+&= \cos\theta\,\bigl(2(2\cos^2\theta - 1) - 1\bigr) \\
+&= \cos\theta\,(4\cos^2\theta - 3) \\
+&= 4\cos^3\theta - 3\cos\theta \\
+&= \cos 3\theta
+\end{aligned}
+$$
+
+#### 결론 — 정확히 $2\theta$ 만큼 회전
+
+$$
+\boxed{\;|\psi_1\rangle = \sin 3\theta\,|w\rangle + \cos 3\theta\,|s'\rangle\;}
+$$
+
+처음에 $|s\rangle = \sin\theta\,|w\rangle + \cos\theta\,|s'\rangle$ 였으니, 각도가
+$\theta \to 3\theta$ 로 늘어났다 — **정확히 $2\theta$ 만큼 $|w\rangle$ 쪽으로 회전.** 이를
+한 번 더 돌리면 $5\theta$, 또 한 번 더 돌리면 $7\theta$ … 매 반복마다 $|w\rangle$ 의
+진폭이 커진다.
+
+> **Grover 반복 $k$ 번 뒤**: $|\psi_k\rangle = \sin\bigl((2k+1)\theta\bigr)\,|w\rangle + \cos\bigl((2k+1)\theta\bigr)\,|s'\rangle$.
+> 측정 시 정답 확률 = $\sin^2\bigl((2k+1)\theta\bigr)$.
+
+## 몇 번 반복해야 하나 — $O(\sqrt{N})$
+
+한 번 반복할 때마다 $|w\rangle$ 쪽으로 $2\theta$ 씩 회전한다. 시작 각도는 $\theta$ 였으니,
+$k$ 번 반복하면 $|w\rangle$ 과의 각도가 $(2k+1)\theta$. 이 각도가 $90°$ 에 가까워질 때
+(즉 벡터가 거의 $|w\rangle$ 과 일치할 때) 측정하면 정답이 나온다.
+
+$N$ 이 크면 $\theta \approx \tfrac{1}{\sqrt N}$ 이므로, 필요한 반복 횟수는:
+
+$$
+k \approx \frac{\pi}{4}\sqrt{N}
+$$
+
+> **$O(\sqrt{N})$ 번** 의 반복이면 충분하다. 고전 $O(N)$ 대비 제곱근만큼 빨라진 것 —
+> 이것이 Grover 의 양자 우위다.
+
+<Callout kind="warn">
+무한정 반복하면 오히려 나빠진다. 회전이 $|w\rangle$ 을 지나쳐 버리면 진폭이 다시 줄어든다.
+$\tfrac{\pi}{4}\sqrt N$ 근처의 **적절한 횟수에서 멈춰야** 한다 — "더 돌릴수록 좋다"가
+아니다.
+</Callout>
+
+<Callout kind="tip">
+Grover 도 11장의 골격 그대로다. ① H 로 모든 후보를 **중첩**, ② 오라클이 정답에 **위상**
+(부호)을 심고, ③ 확산기가 **간섭** 으로 정답 진폭만 키운다. 4장에서 "정답 항의 진폭은
+보강, 오답은 상쇄하도록 행렬을 설계한다"고 한 양자 알고리즘의 정의가, Grover 에서
+"오라클 + 확산기" 라는 구체적인 두 행렬로 실현된 셈이다.
+</Callout>
+
+<Callout kind="summary">
+- **문제**: 정렬 안 된 $N=2^n$ 개 중 정답 $w$ 찾기. 고전 $O(N)$ → Grover $O(\sqrt{N})$
+- **출발**: $H^{\otimes n}$ 으로 균등 중첩 $|s\rangle$. 정답 방향과 각도 $\theta$, $\sin\theta = 1/\sqrt N$
+- **Grover 반복 = 두 반사**: ① 오라클 $V_f$ (정답 위상 뒤집기) + ② 확산기 $2|s\rangle\langle s|-I$ (평균에 대한 반사) → 합치면 $|w\rangle$ 쪽으로 $2\theta$ 회전
+- **반복 횟수** $\approx \tfrac{\pi}{4}\sqrt{N}$ 에서 멈추고 측정 → 높은 확률로 정답
+- 모든 양자 알고리즘의 골격: 중첩 → 위상 → 간섭으로 답 증폭
+</Callout>

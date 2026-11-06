@@ -1,0 +1,483 @@
+2부의 마지막 장이자, 첫 장에서 약속한 문장의 후반부다 — **양자 연산은 행렬이다.** 1부에서
+손으로 올리던 게이트들(X, CX, H …)이 정확히 무엇이었는지 이제 답할 수 있다.
+
+## 왜 행렬인가
+
+논리를 한 줄로 따라가 보자.
+
+- 양자 상태는 **벡터** 다. (4~8장)
+- 양자 연산은 상태를 다른 상태로 보낸다 — 즉 **벡터를 벡터로** 보낸다.
+- 벡터에 곱해서 벡터를 내놓는 것은 **행렬** 이다.
+- 따라서 **양자 연산 = 행렬**.
+
+그리고 그 행렬은 아무 행렬이 아니라 두 가지 조건을 만족해야 한다.
+
+> 양자 연산은 **선형(linear)** 이고 **unitary** 다. unitary이기 때문에
+> **가역(reversible)** 이다 — 즉 거꾸로 되돌릴 수 있다.
+
+## 행렬 연산 복습
+
+필요한 만큼만 빠르게 짚는다.
+
+- 행렬은 `행 × 열` 크기를 가진다. `2행 3열` 행렬은 원소가 `2×3 = 6`개.
+- **스칼라 × 행렬**: 모든 원소에 그 수를 곱한다.
+- **행렬 + 행렬**: 같은 자리끼리 더한다. (크기가 같아야 함)
+- **행렬 × 행렬**: 앞 행렬의 한 **행** 과 뒤 행렬의 한 **열** 을 내적하듯 곱해 더한다.
+  `(i,j)` 원소 = `Σₖ aᵢₖ bₖⱼ`.
+
+행렬 × 열벡터도 행렬 × 행렬의 특수한 경우다 — 결과는 다시 열벡터, 즉 또 하나의 양자
+상태다.
+
+## 선형 연산자
+
+힐베르트 공간 `V` 위의 연산자 `L̂ : V → V` 가 **선형** 이라는 것은 다음 두 조건이다.
+
+$$
+\begin{aligned}
+\text{(a)} \quad & \hat{L}\bigl(|\phi\rangle + |\psi\rangle\bigr) = \hat{L}|\phi\rangle + \hat{L}|\psi\rangle \\
+\text{(b)} \quad & \hat{L}\bigl(z\,|\phi\rangle\bigr) = z\,\bigl(\hat{L}|\phi\rangle\bigr)
+\end{aligned}
+$$
+
+3장에서 "양자 게이트는 선형이라 중첩 입력을 한 번에 처리한다"고 했던 그 선형성이, 정확히
+이 두 식이다. 그런데 여기서 한 번 더 풀고 가자 — **왜** 두 식이 "한 번에 처리" 라는
+마법으로 이어지는지가 1부 전체의 핵심이었으니까.
+
+### 선형성이 곧 "중첩을 한 번에 처리하기" 다
+
+$|\psi\rangle = \alpha|0\rangle + \beta|1\rangle$ 같은 중첩 상태에 행렬 $M$ (= 양자 연산) 을 곱한다고 하자. 위 두 조건 (a), (b) 를 차례로 적용하면 다음과 같이 떨어진다.
+
+$$
+\begin{aligned}
+M\,|\psi\rangle &= M\bigl(\alpha\,|0\rangle + \beta\,|1\rangle\bigr) \\
+&\overset{(\mathrm{a})}{=} M(\alpha\,|0\rangle) + M(\beta\,|1\rangle) \\
+&\overset{(\mathrm{b})}{=} \alpha\,(M|0\rangle) + \beta\,(M|1\rangle)
+\end{aligned}
+$$
+
+문장으로 옮기면:
+
+> **행렬 `M` 은 각 기저 항에 따로 적용된 뒤, 원래 진폭으로 다시 묶인다.**
+> 중첩의 모든 항이 **한 번의 행렬 곱** 으로 동시에 처리되는 메커니즘이 (a)·(b) 안에
+> 그대로 들어 있다.
+
+<Figure
+  caption="선형 연산자가 중첩을 처리하는 메커니즘. 위쪽 단일 입력 |ψ⟩=α|0⟩+β|1⟩ 가 행렬 M 을 거치는 일은, 실제로는 |0⟩ 과 |1⟩ 각각에 M 을 적용한 결과들을 α·β 의 비율로 다시 합치는 것과 똑같다. 행렬 곱 한 번이 두 (또는 더 많은) 작업을 동시에 수행하는 이유."
+>
+  <svg viewBox="0 0 480 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="선형 연산자가 중첩 입력을 한 번에 처리하는 흐름" style={{ width: '100%', maxWidth: '580px', height: 'auto' }}>
+    <defs>
+      <marker id="ln-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
+      </marker>
+    </defs>
+    <rect x="160" y="20" width="160" height="38" rx="6" fill="#a78bfa" opacity="0.18" stroke="#a78bfa" strokeWidth="1.3" />
+    <text x="240" y="44" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">|ψ⟩ = α|0⟩ + β|1⟩</text>
+    <line x1="240" y1="62" x2="240" y2="98" stroke="currentColor" strokeWidth="2" markerEnd="url(#ln-arr)" />
+    <text x="252" y="84" fontSize="12" fontWeight="700" fill="currentColor">M</text>
+    <text x="290" y="84" fontSize="10" fill="currentColor" opacity="0.65" fontStyle="italic">(선형)</text>
+    <line x1="240" y1="106" x2="115" y2="148" stroke="currentColor" strokeWidth="1.4" opacity="0.55" markerEnd="url(#ln-arr)" />
+    <line x1="240" y1="106" x2="365" y2="148" stroke="currentColor" strokeWidth="1.4" opacity="0.55" markerEnd="url(#ln-arr)" />
+    <rect x="35" y="155" width="160" height="38" rx="6" fill="#a78bfa" opacity="0.18" stroke="#a78bfa" strokeWidth="1.3" />
+    <text x="115" y="180" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">α · M|0⟩</text>
+    <rect x="285" y="155" width="160" height="38" rx="6" fill="#a78bfa" opacity="0.18" stroke="#a78bfa" strokeWidth="1.3" />
+    <text x="365" y="180" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">β · M|1⟩</text>
+    <text x="240" y="180" fontSize="18" fontWeight="700" fill="currentColor" opacity="0.55" textAnchor="middle">+</text>
+    <text x="240" y="230" fontSize="11" fill="currentColor" opacity="0.85" textAnchor="middle" fontStyle="italic">= 한 번의 행렬 곱이 두 항 각각에 동시에 작용한 결과</text>
+  </svg>
+</Figure>
+
+#### 1부 half adder 가 다시 보이는 순간
+
+3장에서 본 그 장면 — half adder 회로 하나가 네 개의 덧셈을 동시에 처리한 것 — 이
+정확히 이 원리다. 입력이
+
+$$
+|\psi_1\rangle = \tfrac{1}{2}\bigl(|0000\rangle + |0001\rangle + |0010\rangle + |0011\rangle\bigr)
+$$
+
+이고 half adder 의 행렬을 $H_{\text{add}}$ 라 하면, 선형성 덕분에:
+
+$$
+H_{\text{add}}\,|\psi_1\rangle = \tfrac{1}{2}\bigl(H_{\text{add}}|0000\rangle + H_{\text{add}}|0001\rangle + H_{\text{add}}|0010\rangle + H_{\text{add}}|0011\rangle\bigr)
+$$
+
+**하드웨어가 회로를 네 번 돌리는 게 아니라, 행렬 곱이 한 번에 네 덧셈을 수행** 한다. 1부에서
+"양자 병렬성" 이라고 부른 정체가 바로 이 분배다.
+
+<Callout kind="tip">
+큐비트 `n` 개의 상태는 `2ⁿ` 차원 벡터다 (8장). 선형 연산자는 그 `2ⁿ` 개의 기저 항
+**전부에** 한 번에 작용한다 — 큐비트 50 개면 한 번의 행렬 곱이 약 `10¹⁵` 개 항을 동시에
+처리한다는 뜻. 1부의 "한 회로가 모든 덧셈을 동시에" 라는 마법은 결국 **선형성 + 텐서곱**
+두 가지로 분해된다.
+</Callout>
+
+3장의 한계도 함께 떠올리자 — 측정은 그중 하나만 돌려준다. 그래서 양자 알고리즘 설계의
+핵심은 4장에서 본 그대로다: **정답 항의 진폭은 보강 간섭으로 키우고, 오답 항의 진폭은
+상쇄 간섭으로 죽이는** 행렬 `M` 을 잘 골라 두는 것.
+
+### 연산자를 행렬로 적기
+
+선형 연산자는 기저에 대한 작용만 정하면 완전히 결정된다. 정규직교 기저 `{|vᵢ⟩}` 에 대해:
+
+$$
+\hat{L}\,|v_i\rangle = \sum_{j} L_{ji}\,|v_j\rangle, \qquad L_{ji} = \langle v_j |\,\hat{L}\,| v_i \rangle
+$$
+
+`Lⱼᵢ = ⟨vⱼ|L̂|vᵢ⟩` 가 그 행렬의 `(j, i)` 원소다. "bra — 연산자 — ket" 을 끼워 넣으면
+행렬 성분이 하나씩 떨어진다.
+
+## 역행렬·전치·Hermitian 전치
+
+`2×2` 정사각 행렬 `A = [a₀₀ a₀₁ ; a₁₀ a₁₁]` 를 두고 세 가지 변형을 정의한다.
+
+- **단위 행렬** `I = [1 0 ; 0 1]` — 곱해도 아무 일도 안 일어나는 행렬.
+- **역행렬** `A⁻¹` — `A⁻¹A = AA⁻¹ = I` 를 만족하는 행렬. `A` 의 작용을 되돌린다.
+- **전치 행렬** `Aᵗ` — 행과 열을 맞바꾼 것. `(Aᵗ)ᵢⱼ = Aⱼᵢ`.
+- **Hermitian 전치(에르미트 전치)** `A†` — 전치한 뒤 모든 원소에 **켤레** 까지 씌운 것. "켤레 전치"라고도
+  한다. `A† = (Aᵗ)*`.
+
+bra가 ket의 Hermitian 전치였던 것(5장)과 같은 연산이다.
+
+## unitary 연산자 — 양자 게이트의 정체
+
+$$
+A^{\dagger} = A^{-1} \qquad \Longleftrightarrow \qquad A^{\dagger}A = A\,A^{\dagger} = I
+$$
+
+> Hermitian 전치가 곧 역행렬인 행렬을 **unitary** 라 한다. **모든 양자
+> 게이트는 unitary 행렬** 이다.
+
+unitary가 중요한 이유:
+
+- **norm을 보존한다.** 단위 벡터를 단위 벡터로 보낸다 → "확률의 합 = 1" 이 깨지지 않는다.
+- **가역이다.** `A†` 를 곱하면 원래대로 돌아온다 → 양자 연산은 정보를 잃지 않는다.
+  (측정만이 예외 — 측정은 unitary가 아니고, 그래서 되돌릴 수 없다.)
+
+### 예시: |0⟩→|+i⟩, |1⟩→|−i⟩ 인 연산자
+
+`|0⟩` 을 `|+i⟩` 로, `|1⟩` 을 `|−i⟩` 로 보내는 연산자를 행렬로 적으면:
+
+$$
+U = \begin{bmatrix} 1/\sqrt{2} & 1/\sqrt{2} \\ i/\sqrt{2} & -i/\sqrt{2} \end{bmatrix}
+$$
+
+직접 확인할 수 있다: `U` 의 첫 열이 `|+i⟩ = [1/√2; i/√2]`, 둘째 열이
+`|−i⟩ = [1/√2; −i/√2]`. 그리고 `U†U = I` 가 성립한다 → `U` 는 unitary. 7장에서 "기저를
+바꾸는 일은 unitary 행렬 곱"이라 한 것이 바로 이것이다.
+
+## Hermitian 연산자 — 관측 가능량
+
+unitary와 짝을 이루는 또 다른 특별한 행렬이 있다.
+
+$$
+A^{\dagger} = A
+$$
+
+> Hermitian 전치가 자기 자신과 같은 행렬을 **Hermitian** 이라 한다.
+
+Hermitian 연산자는 `⟨ψ|Ĥ|ψ⟩` 가 항상 **실수** 라는 성질을 가진다. 그래서 물리적으로 중요한
+의미가 있다.
+
+> 양자역학에서 **물리적 관측 가능량(observable)** — 에너지, 위치, 스핀 등 측정으로 얻는
+> 실수 값 — 은 모두 **Hermitian 연산자** 로 표현된다.
+
+### Pauli 연산자
+
+대표적인 예가 **Pauli 연산자(파울리 연산자)** 다. 1부에서 만난 X 게이트가 Pauli X(`σₓ`)다. Y 게이트는
+`σᵧ`:
+
+$$
+\sigma_y = \begin{bmatrix} 0 & -i \\ i & 0 \end{bmatrix}
+$$
+
+이 `σᵧ` 를 따져 보면:
+
+- `σᵧ† = σᵧ` → **Hermitian** (관측 가능량으로 쓸 수 있다)
+- `σᵧ σᵧ† = I` → **unitary** (양자 게이트로 쓸 수 있다)
+
+> Pauli 연산자는 Hermitian이면서 동시에 unitary다. 그래서 게이트로도, 측정의 기준으로도
+> 쓰인다. 7장의 X 기저·Y 기저·Z 기저라는 이름이 바로 Pauli X·Y·Z 에서 왔다.
+
+## 여러 큐비트에 거는 연산
+
+큐비트가 여러 개일 때의 연산은 8장의 텐서곱으로 조립된다. `V` 위의 연산자 `Â` 와 `W` 위의
+`B̂` 가 있으면, 전체 공간 `V⊗W` 위의 연산자는:
+
+$$
+(\hat{A} \otimes \hat{B})\bigl(|v_i\rangle \otimes |w_j\rangle\bigr) = \bigl(\hat{A}|v_i\rangle\bigr) \otimes \bigl(\hat{B}|w_j\rangle\bigr)
+$$
+
+그리고 `Â ⊗ B̂` 의 행렬 표현은 두 행렬의 **Kronecker 곱** `A ⊗ B` 다. 1부에서 "X 게이트를
+q[0]에만 올린다" 고 했던 것은, 실제로는 `X ⊗ I ⊗ I ⊗ I` 라는 `16×16` unitary 행렬을
+상태 벡터에 곱하는 일이었다.
+
+## 게이트 카탈로그 — 실제로 쓰이는 행렬들
+
+지금까지 추상적으로 "양자 게이트 = 유니터리 행렬" 이라고 했다. 이제 **실제로 어떤 행렬들이
+쓰이는지** 정리한다. 이 한 절이 곧 IBM Composer 의 게이트 팔레트와 일대일 대응된다.
+
+### ① 단일 큐비트 게이트 — Pauli 가족과 친구들
+
+가장 기본은 다섯 개. 모두 $2 \times 2$ 유니터리 행렬이다.
+
+#### Pauli I, X, Y, Z
+
+$$
+I = \begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix}, \quad X = \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix}, \quad Y = \begin{bmatrix} 0 & -i \\ i & 0 \end{bmatrix}, \quad Z = \begin{bmatrix} 1 & 0 \\ 0 & -1 \end{bmatrix}
+$$
+
+각각이 $|0\rangle$, $|1\rangle$ 에 어떻게 작용하는지 손으로 한 번 계산해 보자.
+
+$$
+\begin{aligned}
+X|0\rangle &= \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix}\begin{bmatrix} 1 \\ 0 \end{bmatrix} = \begin{bmatrix} 0 \\ 1 \end{bmatrix} = |1\rangle, & X|1\rangle &= |0\rangle \\
+Y|0\rangle &= \begin{bmatrix} 0 & -i \\ i & 0 \end{bmatrix}\begin{bmatrix} 1 \\ 0 \end{bmatrix} = \begin{bmatrix} 0 \\ i \end{bmatrix} = i\,|1\rangle, & Y|1\rangle &= -i\,|0\rangle \\
+Z|0\rangle &= |0\rangle, & Z|1\rangle &= -|1\rangle \\
+I|0\rangle &= |0\rangle, & I|1\rangle &= |1\rangle
+\end{aligned}
+$$
+
+각자의 "역할" 한 줄 요약:
+
+- $I$ — **항등(identity)**. 아무 일도 안 함. 자리 채우기용 (텐서곱에서 "이 큐비트엔 손 안댐").
+- $X$ — **비트 뒤집기**. 고전 NOT. $|0\rangle \leftrightarrow |1\rangle$.
+- $Y$ — 비트 뒤집기 + $\pm i$ 위상. 부호와 허수가 함께.
+- $Z$ — **위상 뒤집기**. $|1\rangle$ 의 부호만 뒤집음 ($|0\rangle$ 은 그대로).
+
+#### Hadamard $H$
+
+$$
+H = \frac{1}{\sqrt{2}}\begin{bmatrix} 1 & 1 \\ 1 & -1 \end{bmatrix} = \frac{1}{\sqrt{2}}(X + Z)
+$$
+
+작용:
+
+$$
+\begin{aligned}
+H|0\rangle &= \tfrac{1}{\sqrt{2}}(|0\rangle + |1\rangle) = |{+}\rangle, &
+H|1\rangle &= \tfrac{1}{\sqrt{2}}(|0\rangle - |1\rangle) = |{-}\rangle \\
+H|{+}\rangle &= |0\rangle, & H|{-}\rangle &= |1\rangle
+\end{aligned}
+$$
+
+> $H$ 는 자기 자신의 역행렬 ($HH = I$). 계산 기저 $\{|0\rangle, |1\rangle\}$ 와 $X$ 기저
+> $\{|+\rangle, |-\rangle\}$ 사이를 왔다 갔다 하는 **기저 변환** 도구다 (7장).
+
+#### 위상 게이트 $S$, $T$
+
+$$
+S = \begin{bmatrix} 1 & 0 \\ 0 & i \end{bmatrix}, \qquad T = \begin{bmatrix} 1 & 0 \\ 0 & e^{i\pi/4} \end{bmatrix}
+$$
+
+둘 다 $|0\rangle$ 은 그대로 두고 $|1\rangle$ 에만 위상을 더한다. $S$ 는 90°, $T$ 는 45°.
+$Z$ 는 180° 위상이었으니, 다음 항등식이 성립한다.
+
+$$
+S^2 = Z, \qquad T^2 = S, \qquad \therefore\; T = \sqrt{S} = \sqrt[4]{Z}
+$$
+
+$T$ 가 "$\pi/8$ 게이트" 라고도 불리는데, 이는 $T$ 의 전체 위상까지 고려하면 $e^{-i\pi/8}$
+배의 위상이 따라붙는 관습 때문이다.
+
+지금까지의 단일 큐비트 게이트를 한눈에 정리하면 (행렬은 위에서 다 봤다) — 각각이 IBM
+Composer 팔레트의 버튼 하나에 대응된다.
+
+| 게이트 | 한 줄 역할 | 위상 |
+|--------|-----------|------|
+| `I` | 항등 (아무 일도 안 함) | — |
+| `X` | 비트 뒤집기 (고전 NOT) | — |
+| `Y` | 비트 뒤집기 + 허수 위상 | ±90° |
+| `Z` | 위상만 뒤집기 (비트는 그대로) | 180° |
+| `H` | 중첩 만들기 / 기저 변환 ($X\leftrightarrow Z$) | — |
+| `S` | 위상 게이트 ($=\sqrt{Z}$) | 90° |
+| `T` | 위상 게이트 ($=\sqrt{S}=\sqrt[4]{Z}$) | 45° |
+
+### ② 게이트 항등식 — 자주 쓰는 cheat sheet
+
+알고리즘을 손으로 따라갈 때 알아 두면 자릿수 줄여 주는 항등식들.
+
+$$
+\begin{aligned}
+XX = YY = ZZ &= HH = I &&\text{(자기 자신의 역행렬)} \\
+XY &= -YX = iZ, \quad YZ = -ZY = iX, \quad ZX = -XZ = iY \\
+XYX &= -Y, \quad XZX = -Z &&\text{(반사 효과)} \\
+HXH &= Z, \quad HZH = X &&\text{($H$ 가 } X \leftrightarrow Z \text{ 변환)} \\
+S^2 &= Z, \quad T^2 = S, \quad T = \sqrt{S} = \sqrt[4]{Z}
+\end{aligned}
+$$
+
+### ③ 텐서곱 게이트 — 워크스루: $Y \otimes X$
+
+여러 큐비트를 동시에 다루는 게이트는 8장의 Kronecker 곱이다. 직접 계산해 보자.
+
+$$
+\begin{aligned}
+Y \otimes X &= \begin{bmatrix} 0 & -i \\ i & 0 \end{bmatrix} \otimes \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix} \\
+&= \begin{bmatrix} 0 \cdot \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix} & -i \cdot \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix} \\[4pt] i \cdot \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix} & 0 \cdot \begin{bmatrix} 0 & 1 \\ 1 & 0 \end{bmatrix} \end{bmatrix} \\
+&= \begin{bmatrix} 0 & 0 & 0 & -i \\ 0 & 0 & -i & 0 \\ 0 & i & 0 & 0 \\ i & 0 & 0 & 0 \end{bmatrix}
+\end{aligned}
+$$
+
+이를 $|00\rangle = [1, 0, 0, 0]^{\mathsf{T}}$ 에 곱하면:
+
+$$
+(Y \otimes X)|00\rangle = [0, 0, 0, i]^{\mathsf{T}} = i\,|11\rangle = (Y|0\rangle)_{q_1} \otimes (X|0\rangle)_{q_0}
+$$
+
+핵심 규칙 $(A \otimes B)(\alpha \otimes \beta) = (A\alpha) \otimes (B\beta)$ 가 그대로 떨어진다.
+**$Y$ 가 $q_1$ 에, $X$ 가 $q_0$ 에 따로 작용한 결과의 곱**이다.
+
+### ④ CX(CNOT) 행렬 — 그리고 방향 함정
+
+2장에서 CX 를 진리표로 봤다. 행렬은 어떻게 생겼나? $|q_1 q_0\rangle$ 순서로 $q_1$ 이
+control, $q_0$ 가 target 일 때 ($C_{10}$):
+
+$$
+C_{10} = \begin{bmatrix} 1 & 0 & 0 & 0 \\ 0 & 1 & 0 & 0 \\ 0 & 0 & 0 & 1 \\ 0 & 0 & 1 & 0 \end{bmatrix} \quad\text{(}\;|q_1, q_0\rangle \to |q_1, q_1 \oplus q_0\rangle\;\text{)}
+$$
+
+위 두 행은 $|00\rangle, |01\rangle$ 그대로 (control=0), 아래 두 행이 $|10\rangle \leftrightarrow |11\rangle$
+서로 맞바뀜 (control=1 일 때만 target 뒤집기).
+
+#### 방향 함정 — $C_{01}$ vs $C_{10}$
+
+같은 CX 게이트라도 **어느 큐비트가 control 이냐** 에 따라 행렬이 다르다.
+
+$$
+C_{01} = \begin{bmatrix} 1 & 0 & 0 & 0 \\ 0 & 0 & 0 & 1 \\ 0 & 0 & 1 & 0 \\ 0 & 1 & 0 & 0 \end{bmatrix}, \qquad C_{10} = \begin{bmatrix} 1 & 0 & 0 & 0 \\ 0 & 1 & 0 & 0 \\ 0 & 0 & 0 & 1 \\ 0 & 0 & 1 & 0 \end{bmatrix}
+$$
+
+$C_{01}$ 은 control = $q_0$, target = $q_1$ — $|01\rangle \leftrightarrow |11\rangle$ 가 바뀐다
+($q_0$ 가 1일 때 $q_1$ 뒤집기). $C_{10}$ 은 그 반대. **회로 그릴 때 ●(control) 위치를 꼭
+확인해야 한다.**
+
+### ⑤ Toffoli(CCX) — 3큐비트, 8×8 행렬
+
+control 두 개가 모두 $|1\rangle$ 일 때만 target 뒤집기. AND 역할 (2장 half adder 의 CARRY).
+
+$$
+\text{CCX} = \begin{bmatrix}
+1 & 0 & 0 & 0 & 0 & 0 & 0 & 0 \\
+0 & 1 & 0 & 0 & 0 & 0 & 0 & 0 \\
+0 & 0 & 1 & 0 & 0 & 0 & 0 & 0 \\
+0 & 0 & 0 & 1 & 0 & 0 & 0 & 0 \\
+0 & 0 & 0 & 0 & 1 & 0 & 0 & 0 \\
+0 & 0 & 0 & 0 & 0 & 1 & 0 & 0 \\
+0 & 0 & 0 & 0 & 0 & 0 & 0 & 1 \\
+0 & 0 & 0 & 0 & 0 & 0 & 1 & 0
+\end{bmatrix}
+$$
+
+마지막 두 행에서 $|110\rangle \leftrightarrow |111\rangle$ 가 바뀐다 — 앞 두 control 비트가 다
+1일 때만 target($q_0$) 뒤집기.
+
+<Callout kind="tip">
+**Toffoli + H = 만능**. CCX 와 Hadamard 게이트 두 종류면 임의의 양자 알고리즘을 (원하는
+정밀도까지) 흉내낼 수 있다 ("universal gate set"). 컴파일러는 복잡한 unitary 를 이 두
+게이트의 조합으로 분해해 실제 하드웨어로 보낸다.
+</Callout>
+
+### ⑥ 풀이 워크스루 — 3큐비트 회로 한 번 손으로
+
+회로를 식으로 적고 단계별 상태를 따라가 본다. 다음 3큐비트 회로를 보자.
+
+<Figure
+  src="/figures/ch09-3qubit-circuit.png"
+  caption="실습 회로. q[0]=Y, q[1]=H 시작 → CX(q[1]→q[2]) → CX(q[0]→q[1]) → q[0]에 H. ψ₀~ψ₄ 의 중간 상태를 모두 따라가 본다."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+전체 회로를 한 행렬로 쓰면 ($q_0 q_1 q_2$ 순서):
+
+$$
+|\psi_4\rangle = (I \otimes I \otimes H)\,(I \otimes C_{01})\,(C_{12} \otimes I)\,(I \otimes H \otimes Y)\,|000\rangle
+$$
+
+단계별로 적용:
+
+**시작** — $|\psi_0\rangle = |000\rangle = |0\rangle \otimes |0\rangle \otimes |0\rangle$.
+
+**1단계 — $I \otimes H \otimes Y$ 적용**:
+
+$$
+\begin{aligned}
+|\psi_1\rangle &= I|0\rangle \otimes H|0\rangle \otimes Y|0\rangle \\
+&= |0\rangle \otimes \tfrac{1}{\sqrt{2}}(|0\rangle + |1\rangle) \otimes i\,|1\rangle \\
+&= \tfrac{i}{\sqrt{2}}\bigl(|001\rangle + |011\rangle\bigr)
+\end{aligned}
+$$
+
+**2단계 — $C_{12} \otimes I$ 적용** ($q_1$ control, $q_2$ target). $q_2$ 부분은 그대로,
+$C_{12}$ 가 앞 두 큐비트의 $|00\rangle, |01\rangle$ 에 작용:
+
+$$
+\begin{aligned}
+|\psi_2\rangle &= \tfrac{i}{\sqrt{2}}\bigl(C_{12}|00\rangle \otimes |1\rangle + C_{12}|01\rangle \otimes |1\rangle\bigr) \\
+&= \tfrac{i}{\sqrt{2}}\bigl(|00\rangle + |11\rangle\bigr) \otimes |1\rangle \\
+&= \tfrac{i}{\sqrt{2}}\bigl(|001\rangle + |111\rangle\bigr)
+\end{aligned}
+$$
+
+(앞 두 큐비트가 얽힌 Bell 상태 + 셋째는 $|1\rangle$. 자세한 얽힘 이야기는 10장.)
+
+**3단계 — $I \otimes C_{01}$ 적용** ($q_1$ control, $q_2$ target. 첫 큐비트 $q_0$ 는 그대로):
+
+$$
+\begin{aligned}
+|\psi_3\rangle &= \tfrac{i}{\sqrt{2}}\bigl(I|0\rangle \otimes C_{01}|01\rangle + I|1\rangle \otimes C_{01}|11\rangle\bigr) \\
+&= \tfrac{i}{\sqrt{2}}\bigl(|0\rangle \otimes |11\rangle + |1\rangle \otimes |01\rangle\bigr) \\
+&= \tfrac{i}{\sqrt{2}}\bigl(|011\rangle + |101\rangle\bigr)
+\end{aligned}
+$$
+
+**4단계 — $I \otimes I \otimes H$ 적용** (마지막 큐비트 $q_2$ 에 H. 앞 두 큐비트 그대로):
+
+$$
+\begin{aligned}
+|\psi_4\rangle &= \tfrac{i}{\sqrt{2}}\bigl(|01\rangle \otimes H|1\rangle + |10\rangle \otimes H|1\rangle\bigr) \\
+&= \tfrac{i}{\sqrt{2}}\bigl(|01\rangle + |10\rangle\bigr) \otimes |{-}\rangle \\
+&= \tfrac{i}{\sqrt{2}}\bigl(|01\rangle + |10\rangle\bigr) \otimes \tfrac{1}{\sqrt{2}}\bigl(|0\rangle - |1\rangle\bigr) \\
+&= \tfrac{i}{2}\bigl(|010\rangle - |011\rangle + |100\rangle - |101\rangle\bigr)
+\end{aligned}
+$$
+
+> **결과**: 네 항 $|010\rangle, |011\rangle, |100\rangle, |101\rangle$ 가 각각 진폭
+> $\pm\tfrac{i}{2}$. 측정 확률은 모두 $\left|\tfrac{i}{2}\right|^2 = \tfrac{1}{4} = 25\%$.
+
+<Callout kind="summary" title="이 절의 카탈로그 요약">
+- **단일 큐비트**: $I, X, Y, Z$ (Pauli), $H$ (= $(X+Z)/\sqrt 2$), $S$ (= $\sqrt Z$), $T$ (= $\sqrt S$)
+- **자주 쓰는 항등식**: $XX = YY = ZZ = HH = I$, $HXH = Z$, $S^2 = Z$, $T^2 = S$
+- **텐서곱**: 단일 큐비트들을 $\otimes$ 로 묶어 다중 큐비트 게이트. Kronecker 곱이 자동 분배
+- **CX(CNOT)**: 4×4. control·target 방향에 따라 $C_{01}$ vs $C_{10}$ 행렬이 다름 (●위치 확인!)
+- **Toffoli(CCX)**: 8×8. 두 control 다 1일 때만 target 뒤집기 (AND). $H + \text{CCX}$ 만으로 모든 unitary 표현 가능
+- 회로 → 단계별 상태 추적은 텐서곱 + 분배법칙 + 위 게이트 행렬의 합성으로 한 줄씩 떨어짐
+</Callout>
+
+## 한 바퀴 돌아왔다
+
+이제 1부의 모든 것이 2부의 언어로 번역된다.
+
+| 1부에서 본 것 | 2부의 정확한 정의 |
+|---------------|-------------------|
+| 큐비트 상태 `\|0⟩`, `\|1⟩` | 2차원 힐베르트 공간의 단위 벡터 (6장) |
+| 중첩 `α\|0⟩ + β\|1⟩` | 기저 벡터의 선형 결합 (5·6장) |
+| 게이트 X, CX, H | unitary 행렬 (9장) |
+| 큐비트 4개 | `2⁴ = 16`차원 텐서곱 공간 (8장) |
+| 측정 확률 | `\|확률진폭\|²`, Hermitian 연산자로 기술 (6·9장) |
+| "회로가 선형이라 한 번에" | 연산자의 선형성 (9장) |
+
+<Callout kind="summary">
+- 양자 연산 = 벡터를 벡터로 보내는 **행렬**. **선형** 이고 **unitary** 이며 **가역**
+- **unitary** (`A† = A⁻¹`): 모든 양자 게이트. norm을 보존하고 되돌릴 수 있다
+- **Hermitian** (`A† = A`): 물리적 관측 가능량. `⟨ψ|Ĥ|ψ⟩` 가 실수
+- **Pauli 연산자** 는 Hermitian이면서 unitary — 게이트로도, 측정 기준으로도 쓰인다
+- 여러 큐비트 연산 = 작은 행렬들의 **Kronecker 곱**
+- 「양자 상태는 벡터, 양자 연산은 행렬」 — 이 한 문장으로 2부가 완성됐다
+</Callout>
+
+<Callout kind="tip">
+여기까지가 양자컴퓨팅의 **언어** 다. 이 위에 Quantum Fourier Transform, Quantum Phase
+Estimation, 그리고 Shor의 인수분해·Grover의 검색 같은 **알고리즘** 이 올라간다. 그것들도
+결국 "특정 unitary 행렬을 잘 설계해서, 원하는 답의 확률진폭만 키우는" 이야기다. 벡터와
+행렬이라는 토대를 잡았으니, 그다음은 그 위에서 무엇을 짓느냐의 문제다.
+</Callout>

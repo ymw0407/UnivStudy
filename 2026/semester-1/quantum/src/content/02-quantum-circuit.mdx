@@ -1,0 +1,162 @@
+이제 1장의 half adder를 **양자 회로**로 만든다. 도구는 IBM이 무료로 제공하는 웹
+브라우저용 회로 편집기 **IBM Quantum Composer** 다. 게이트를 마우스로 끌어다 놓으면
+회로가 그려지고, 상태가 실시간으로 시뮬레이션된다.
+
+## 준비: IBM Quantum Composer
+
+1. [quantum.ibm.com](https://quantum.ibm.com) 에 가입하고 로그인한다.
+2. 대시보드에서 **IBM Quantum Composer** 를 연다.
+3. 새 회로를 만들면 큐비트 몇 개와 고전 레지스터가 놓인 빈 회로가 나온다.
+
+화면 구성은 이렇다.
+
+- **q[0], q[1], …** : 큐비트들. 각각 가로줄(wire) 하나로 그려진다. 처음엔 모두 `|0⟩`.
+- **c (classical register)** : 측정 결과를 담는 **고전 비트** 들. 큐비트가 아니다.
+- **Operations** : 끌어다 쓸 수 있는 게이트 팔레트 (H, X, CX …).
+- **Statevector / Probabilities / Q-sphere** : 현재 양자 상태를 보여 주는 시각화 패널.
+
+<Figure
+  src="/figures/ch02-composer-ui.png"
+  caption="IBM Quantum Composer 화면. 큐비트 4개(q[0]~q[3])와 4비트 고전 레지스터(c4), 왼쪽의 게이트 팔레트, 아래쪽의 Statevector·Probabilities 시각화 패널이 보인다. 현재 상태는 |0000⟩."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+<Callout kind="note">
+이 장에서는 큐비트 4개를 쓴다. 역할을 미리 정해 두자.
+`q[0] = A`, `q[1] = B`, `q[2] = SUM`, `q[3] = CARRY`.
+</Callout>
+
+### 큐비트 순서 읽는 법
+
+여러 큐비트의 상태를 `|q₃q₂q₁q₀⟩` 처럼 쓴다. **q[0]이 맨 오른쪽** 이라는 점을 꼭
+기억하자. 예를 들어 `|1011⟩` 은 `q₃=1, q₂=0, q₁=1, q₀=1` 을 뜻한다. 2진수를 적을 때
+오른쪽이 1의 자리인 것과 같은 관례다.
+
+## 게이트 1: X 게이트 — 0과 1을 뒤집기
+
+**X 게이트** (Pauli X)는 가장 단순한 양자 게이트다. 고전 회로의 NOT과 같다.
+
+| 입력 상태 | 출력 상태 |
+|-----------|-----------|
+| `\|0⟩` | `\|1⟩` |
+| `\|1⟩` | `\|0⟩` |
+| `α\|0⟩ + β\|1⟩` | `α\|1⟩ + β\|0⟩` |
+
+세 번째 줄이 양자다운 부분이다. 중첩 상태가 들어오면 `|0⟩`에 붙어 있던 양과 `|1⟩`에
+붙어 있던 양을 **통째로 맞바꾼다**. (`α`, `β`가 무슨 숫자인지는 2부에서 다룬다. 지금은
+"0 쪽 무게"와 "1 쪽 무게"라고 생각하면 충분하다.)
+
+<Figure
+  src="/figures/ch02-x-gate.png"
+  caption="q[0]·q[1]에 X 게이트를 올린 모습. |0000⟩ 이 |0011⟩ 로 바뀌어 Statevector 막대가 0011 로 이동했다. 왼쪽 표가 X 게이트의 입출력 규칙."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+> **half adder 입력 넣기**: `A`와 `B`에 `1`을 넣고 싶으면 `q[0]`과 `q[1]`에 X 게이트를
+> 하나씩 올린다. `|0000⟩` 이 `|0011⟩` 로 바뀐다.
+
+## 게이트 2: CX 게이트 (CNOT) — 조건부 뒤집기
+
+**CX 게이트** (controlled-X, CNOT)는 큐비트 **두 개** 를 쓴다.
+
+- **control** 큐비트: 건드리지 않는다. 조건 역할만 한다.
+- **target** 큐비트: control이 `|1⟩`일 때만 X(뒤집기)를 당한다.
+
+| control | target (입력) | target (출력) |
+|---------|---------------|---------------|
+| `\|0⟩` | `\|0⟩` | `\|0⟩` |
+| `\|0⟩` | `\|1⟩` | `\|1⟩` |
+| `\|1⟩` | `\|0⟩` | `\|1⟩` |
+| `\|1⟩` | `\|1⟩` | `\|0⟩` |
+
+control이 `|0⟩`이면 target은 그대로, control이 `|1⟩`이면 target이 뒤집힌다. 표의
+target 출력 열을 보면 — `control ⊕ target` 이다. 1장에서 만난 **XOR** 가 바로 여기서
+다시 나온다.
+
+<Figure
+  src="/figures/ch02-cx-gate.png"
+  caption="CX(CNOT) 게이트. 점(●)이 control, ⊕ 가 target. control q[0]이 |1⟩ 이므로 target q[2]가 뒤집혀 |1⟩ 이 됐다. 왼쪽 표가 control–target 입출력 규칙."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+<Callout kind="tip">
+CX의 target은 "control과 자기 자신의 XOR"가 된다. 그래서 CX 게이트는 양자 회로에서
+**XOR(=mod 2 덧셈)를 수행하는 부품** 이다. half adder의 `SUM = A ⊕ B` 를 만들 도구다.
+</Callout>
+
+## 게이트 3: Toffoli 게이트 (CCX) — control 두 개
+
+**Toffoli 게이트** (CCX, controlled-controlled-X)는 control이 **두 개** 다.
+
+> control 큐비트 **둘 다** `|1⟩`일 때만 target을 뒤집는다.
+
+control 두 개가 모두 1일 때만 target이 1이 된다 — 이것은 1장의 **AND** 다. half adder의
+`CARRY = A · B` 를 만들 도구가 바로 Toffoli다.
+
+<Figure
+  src="/figures/ch02-toffoli.png"
+  caption="Toffoli(CCX) 게이트. control 점(●)이 두 개. q[0]·q[1]이 둘 다 |1⟩ 일 때만 target q[3]이 뒤집힌다. 왼쪽 표의 마지막 두 줄에서만 target 출력이 바뀌는 것 — 곧 AND."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+## 게이트 4: barrier — 게이트가 아니다
+
+회로 중간에 세로 점선으로 그려지는 **barrier** 도 있다. 이건 양자 연산이 **아니다**.
+상태를 전혀 바꾸지 않는다. 그저 회로를 시각적으로 구획 짓고, 컴파일러가 게이트 순서를
+함부로 재배치하지 못하게 막는 표시일 뿐이다. half adder 블록을 입력 준비 단계와 구분해
+주는 용도로 쓴다.
+
+## half adder 회로 조립하기
+
+이제 부품이 다 모였다. 4개 큐비트로 half adder를 조립한다.
+
+```text
+q[0]  A ─────●─────────●────   (control)
+q[1]  B ─────┼────●────●────   (control)
+q[2]  SUM ───X────X────┼────   ← CX, CX 로 A⊕B
+q[3]  CARRY ─────────────X──   ← CCX 로 A·B
+```
+
+연산 순서는 이렇다.
+
+1. **`CX(control=q[0], target=q[2])`** — SUM ← SUM ⊕ A
+2. **`CX(control=q[1], target=q[2])`** — SUM ← SUM ⊕ B  → 결국 SUM = A ⊕ B
+3. **`CCX(control=q[0], q[1], target=q[3])`** — CARRY = A · B
+
+SUM(`q[2]`)과 CARRY(`q[3]`)는 처음에 `|0⟩`이므로, 위 세 게이트만 거치면 `q[2]`에는
+`A⊕B`, `q[3]`에는 `A·B`가 정확히 들어간다.
+
+### 직접 입력을 넣어 확인하기
+
+입력은 `q[0]`, `q[1]`에 X 게이트로 준비한다. 몇 가지를 넣어 보자. 결과는 `|q₃q₂q₁q₀⟩`
+형태로 읽는다 (`q₃`=CARRY, `q₂`=SUM).
+
+| 넣은 입력 (A,B) | 시작 상태 | 끝 상태 | 읽는 법 |
+|-----------------|-----------|---------|---------|
+| A=0, B=0 | `\|0000⟩` | `\|0000⟩` | 0 + 0 = `00` |
+| A=1, B=0 | `\|0001⟩` → X로 준비 | `\|0101⟩` | 1 + 0 = `01` |
+| A=0, B=1 | `\|0010⟩` | `\|0110⟩` | 1 + 0 = `01` |
+| A=1, B=1 | `\|0011⟩` | `\|1011⟩` | 1 + 1 = `10` |
+
+마지막 줄을 보자. `A=1, B=1`을 넣으면 끝 상태가 `|1011⟩` — `q₃q₂ = 10`, 즉 carry 1,
+sum 0. **`1 + 1 = 10`** 이 회로로 계산된 것이다.
+
+<Figure
+  src="/figures/ch02-half-adder-circuit.png"
+  caption="조립을 마친 half adder. q[0]·q[1]에 X로 A=1·B=1을 준비하고(파란 블록), barrier 뒤로 CX·CX·CCX 가 이어진다. 끝 상태가 |1011⟩ — 즉 1+1=10."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+<Callout kind="warn">
+지금까지 넣은 입력 `|0⟩`, `|1⟩` 은 **고전적인** 입력이다. 그래서 회로도 고전 덧셈기와
+똑같이 한 번에 한 덧셈만 했다. 양자의 진짜 힘은 입력을 **중첩** 으로 넣을 때 나온다 —
+그게 3장이다.
+</Callout>
+
+<Callout kind="summary">
+- **X**: 0↔1 뒤집기 (NOT)
+- **CX(CNOT)**: control이 1일 때 target 뒤집기 → target = control ⊕ target (**XOR**)
+- **CCX(Toffoli)**: control 둘 다 1일 때 target 뒤집기 (**AND**)
+- **barrier**: 연산 아님, 구획용 표시
+- half adder = `CX·CX`(SUM) + `CCX`(CARRY)
+</Callout>

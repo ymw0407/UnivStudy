@@ -1,0 +1,275 @@
+2부 전체를 관통하는 한 문장이 있다.
+
+> **양자 상태는 벡터로, 양자 연산은 행렬로 표현된다.**
+
+이 문장을 이해하면 양자컴퓨팅의 수학은 거의 다 잡힌다. 이번 장에서는 그 벡터를 적기 위한
+최소 재료 두 가지 — **복소수** 와 **벡터** — 를 준비한다. 고등학교 수준 이상은 필요 없다.
+
+## 복소수: 왜 필요한가
+
+양자 상태의 계수(1부에서 본 `α`, `β`, 확률진폭)는 일반적으로 **복소수** 다. 실수만으로는
+부족하다. 복소수를 모르면 양자 상태를 못 적는다는 뜻이니, 짧게 정리하고 간다.
+
+### 허수 단위 i
+
+$$
+i = \sqrt{-1}, \qquad i^2 = -1
+$$
+
+제곱하면 `−1`이 되는 수다. 실수 중에는 그런 수가 없어서 새로 들인 것이다. 파이썬에서는
+`1j` 로 쓴다 (`0 + 1j`).
+
+**복소수** 는 실수부 `a`와 허수부 `b`로 이루어진 `a + bi` 꼴의 수다.
+
+### 복소수의 norm
+
+복소수의 **norm(노름, 크기)** 은 실수 하나로 나온다.
+
+$$
+|a + bi| = \sqrt{a^2 + b^2}
+$$
+
+복소수를 평면 위의 점 `(a, b)`로 보면, norm은 원점에서 그 점까지의 거리다.
+
+### 켤레복소수
+
+**켤레복소수(complex conjugate)** 는 허수부의 부호만 뒤집은 것이다. 별표 `*`로 쓴다.
+
+$$
+(a + bi)^{*} = a - bi
+$$
+
+<Callout kind="note">
+켤레는 양자에서 끊임없이 나온다. 미리 익혀 둘 사실 하나: 어떤 복소수 `z`에 대해
+`z · z* = |z|²` 이다. 예를 들어 `z = a + bi` 면
+`z · z* = (a+bi)(a−bi) = a² + b² = |z|²`. **켤레를 곱하면 실수인 크기의 제곱이 나온다** —
+이게 5장에서 "내적"과 "확률"을 잇는 다리가 된다.
+</Callout>
+
+## 그래서 복소수가 양자에서 뭘 하는가
+
+여기까지는 복소수의 **계산 규칙** 만 봤다. "실수로는 왜 안 되냐"는 질문에 짧게 답하면
+이렇다.
+
+> 양자 상태의 진폭에는 **확률 크기** 만 있는 게 아니라 **방향(위상, phase)** 이라는 정보가
+> 하나 더 있다. 이 둘을 한 묶음으로 다루는 가장 자연스러운 숫자가 **복소수** 다.
+
+이제 천천히 하나씩 풀어 본다.
+
+### 1단계 — 복소수는 평면 위의 "화살표"다
+
+`a + bi` 라는 복소수를 평면 위의 점 `(a, b)` 로 본다. 원점에서 그 점까지의 화살표가
+**복소수 한 개** 다.
+
+<Figure
+  caption="복소수 a + bi 를 실수부·허수부 평면 위 화살표로 그린 그림. 화살표는 두 가지 정보를 담는다 — 길이(= norm), 그리고 가로축과 이루는 각도(= 위상)."
+>
+  <svg viewBox="0 0 360 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="복소수 a + bi 를 평면 위 화살표로 표현" style={{ width: '100%', maxWidth: '460px', height: 'auto' }}>
+    <defs>
+      <marker id="cn-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa" />
+      </marker>
+    </defs>
+    <line x1="40" y1="200" x2="320" y2="200" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
+    <line x1="60" y1="25" x2="60" y2="220" stroke="currentColor" strokeWidth="1.5" opacity="0.35" />
+    <text x="326" y="205" fontSize="12" fill="currentColor" opacity="0.7">Re</text>
+    <text x="50" y="20" fontSize="12" fill="currentColor" opacity="0.7">Im</text>
+    <line x1="220" y1="200" x2="220" y2="100" stroke="currentColor" strokeWidth="1" strokeDasharray="4 4" opacity="0.3" />
+    <line x1="60" y1="100" x2="220" y2="100" stroke="currentColor" strokeWidth="1" strokeDasharray="4 4" opacity="0.3" />
+    <text x="214" y="218" fontSize="11" fill="currentColor" opacity="0.65">a</text>
+    <text x="42" y="105" fontSize="11" fill="currentColor" opacity="0.65">b</text>
+    <path d="M 100 200 A 40 40 0 0 0 92 175" fill="none" stroke="currentColor" strokeWidth="1.2" opacity="0.55" />
+    <text x="74" y="190" fontSize="11" fill="currentColor" opacity="0.75" fontStyle="italic">위상</text>
+    <line x1="60" y1="200" x2="220" y2="100" stroke="#a78bfa" strokeWidth="2.5" markerEnd="url(#cn-arr)" />
+    <text x="115" y="138" fontSize="11" fill="currentColor" opacity="0.85" fontStyle="italic">길이 = |a+bi|</text>
+    <circle cx="220" cy="100" r="4" fill="#a78bfa" />
+    <text x="230" y="96" fontSize="14" fontWeight="700" fill="#a78bfa">a + bi</text>
+    <circle cx="60" cy="200" r="2.5" fill="currentColor" />
+  </svg>
+</Figure>
+
+화살표는 두 가지 정보를 가진다. **길이** (norm) 와 **방향(각도)** — 이 방향을 **위상
+(phase)** 이라 부른다. 위상이 실수에는 없는 정보다.
+
+### 2단계 — 길이가 같아도 방향이 다르면 다른 복소수다
+
+길이가 모두 `1` 인 복소수 네 개만 봐도, 방향(위상)이 달라서 서로 다른 수다.
+
+<Figure
+  caption="길이가 모두 1인 네 개의 복소수 1, i, −1, −i. 단위 원 위에서 동·북·서·남 네 방향을 가리킨다 — 크기는 같고 방향만 다르다."
+>
+  <svg viewBox="0 0 320 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="단위 원 위의 네 복소수 1, i, -1, -i" style={{ width: '100%', maxWidth: '380px', height: 'auto' }}>
+    <defs>
+      <marker id="cn-arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa" />
+      </marker>
+    </defs>
+    <circle cx="160" cy="120" r="80" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="3 4" opacity="0.35" />
+    <line x1="50" y1="120" x2="270" y2="120" stroke="currentColor" strokeWidth="1" opacity="0.25" />
+    <line x1="160" y1="20" x2="160" y2="220" stroke="currentColor" strokeWidth="1" opacity="0.25" />
+    <circle cx="160" cy="120" r="2.5" fill="currentColor" />
+    <line x1="160" y1="120" x2="234" y2="120" stroke="#a78bfa" strokeWidth="2.2" markerEnd="url(#cn-arr2)" />
+    <text x="244" y="125" fontSize="14" fontWeight="700" fill="#a78bfa">1</text>
+    <line x1="160" y1="120" x2="160" y2="46" stroke="#a78bfa" strokeWidth="2.2" markerEnd="url(#cn-arr2)" />
+    <text x="166" y="40" fontSize="14" fontWeight="700" fill="#a78bfa">i</text>
+    <line x1="160" y1="120" x2="86" y2="120" stroke="#a78bfa" strokeWidth="2.2" markerEnd="url(#cn-arr2)" />
+    <text x="58" y="125" fontSize="14" fontWeight="700" fill="#a78bfa">−1</text>
+    <line x1="160" y1="120" x2="160" y2="194" stroke="#a78bfa" strokeWidth="2.2" markerEnd="url(#cn-arr2)" />
+    <text x="166" y="208" fontSize="14" fontWeight="700" fill="#a78bfa">−i</text>
+    <text x="160" y="240" fontSize="11" fill="currentColor" opacity="0.7" textAnchor="middle">모두 길이 1, 방향만 다르다</text>
+  </svg>
+</Figure>
+
+### 3단계 — 측정해 봐도 "길이"만 보인다
+
+다음 장에서 다시 보지만 미리 말해 두면, 양자 상태 `|ψ⟩ = α|0⟩ + β|1⟩` 을 측정할 때:
+
+- `|0⟩` 이 관측될 확률 = `|α|²` (= α 화살표 길이의 제곱)
+- `|1⟩` 이 관측될 확률 = `|β|²` (= β 화살표 길이의 제곱)
+
+> **측정 확률은 진폭 화살표의 길이의 제곱.** 방향은 여기 안 나타난다.
+
+그럼 방향은 도대체 언제 쓰이나? — 답은 다음 단계다.
+
+### 4단계 — 항이 합쳐질 때 방향이 드러난다: 간섭
+
+가장 단순한 위상 두 개부터 — `+` (동쪽 방향, 위상 0°) 와 `−` (서쪽 방향, 위상 180°). 이
+두 종류만으로도 이미 결정적인 일이 벌어진다.
+
+> **같은 방향(같은 부호) 끼리** 만나면 → 더해져서 **커진다** (보강 간섭, constructive)
+>
+> **반대 방향(반대 부호) 끼리** 만나면 → 빠져서 **0이 된다** (상쇄 간섭, destructive)
+
+파도로 비유하면 직관적이다.
+
+<Figure
+  caption="두 파동을 더할 때. 왼쪽: 같은 방향끼리는 마루+마루로 진폭이 두 배가 된다(보강). 오른쪽: 반대 방향끼리는 마루와 골이 만나 진폭이 0이 된다(상쇄). 이 현상이 간섭(interference)이다."
+>
+  <svg viewBox="0 0 480 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="두 파동의 보강 간섭과 상쇄 간섭" style={{ width: '100%', maxWidth: '600px', height: 'auto' }}>
+    <text x="105" y="20" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">보강 (같은 방향 +, +)</text>
+    <path d="M 30 60 Q 45 30 60 60 T 90 60 T 120 60 T 150 60 T 180 60" fill="none" stroke="#a78bfa" strokeWidth="1.8" opacity="0.85" />
+    <path d="M 30 100 Q 45 70 60 100 T 90 100 T 120 100 T 150 100 T 180 100" fill="none" stroke="#a78bfa" strokeWidth="1.8" opacity="0.85" />
+    <text x="200" y="85" fontSize="18" fontWeight="700" fill="currentColor" opacity="0.55">=</text>
+    <line x1="30" y1="175" x2="180" y2="175" stroke="currentColor" strokeWidth="0.5" opacity="0.25" strokeDasharray="2 4" />
+    <path d="M 30 175 Q 45 115 60 175 T 90 175 T 120 175 T 150 175 T 180 175" fill="none" stroke="#a78bfa" strokeWidth="2.8" />
+    <text x="105" y="225" fontSize="12" fill="currentColor" opacity="0.85" textAnchor="middle">→ 진폭이 두 배로 커짐</text>
+
+    <line x1="240" y1="14" x2="240" y2="240" stroke="currentColor" strokeWidth="1" opacity="0.2" />
+
+    <text x="345" y="20" fontSize="13" fontWeight="700" fill="currentColor" textAnchor="middle">상쇄 (반대 방향 +, −)</text>
+    <path d="M 270 60 Q 285 30 300 60 T 330 60 T 360 60 T 390 60 T 420 60" fill="none" stroke="#a78bfa" strokeWidth="1.8" opacity="0.85" />
+    <path d="M 270 100 Q 285 130 300 100 T 330 100 T 360 100 T 390 100 T 420 100" fill="none" stroke="#a78bfa" strokeWidth="1.8" opacity="0.85" />
+    <text x="440" y="85" fontSize="18" fontWeight="700" fill="currentColor" opacity="0.55">=</text>
+    <line x1="270" y1="175" x2="420" y2="175" stroke="#a78bfa" strokeWidth="2.8" />
+    <text x="345" y="225" fontSize="12" fill="currentColor" opacity="0.85" textAnchor="middle">→ 진폭이 0, 완전히 사라짐</text>
+  </svg>
+</Figure>
+
+양자 상태의 진폭은 정확히 이런 식으로 더해진다. **양자 상태가 본질적으로 파동이라서**,
+파동을 적는 자연스러운 도구인 복소수가 등장하는 것이다.
+
+이 사실을 한 번에 보여 주는 단순한 예가 있다. 두 상태를 비교해 보자.
+
+$$
+\begin{aligned}
+|{+}\rangle &= \tfrac{1}{\sqrt{2}}\,|0\rangle + \tfrac{1}{\sqrt{2}}\,|1\rangle \\[2pt]
+|{-}\rangle &= \tfrac{1}{\sqrt{2}}\,|0\rangle - \tfrac{1}{\sqrt{2}}\,|1\rangle
+\end{aligned}
+$$
+
+`|1⟩` 앞 부호 하나만 다르다. 진폭의 **길이** 는 둘 다 `1/√2` 로 똑같으니, **측정해 보면
+둘 다 `|0⟩` 50%, `|1⟩` 50%** — 구분이 안 된다. 그런데 H 게이트를 한 번 더 걸면 결과가
+완전히 갈린다.
+
+- `|+⟩` 에 H → `|0⟩` (100%)
+- `|−⟩` 에 H → `|1⟩` (100%)
+
+같은 연산을 했는데 결과가 다르다. 비결은 H가 `|0⟩` 항과 `|1⟩` 항을 다시 더할 때 위에서
+본 보강/상쇄 간섭이 일어난다는 것. **단지 부호(위상)만 달랐을 뿐인데, 합쳐지는 과정에서
+한쪽은 살아남고 한쪽은 사라진다.**
+
+### 5단계 — 그래서 양자 알고리즘은 무엇을 하는가
+
+이 모든 게 한 문장으로 정리된다.
+
+> **정답 항들의 위상은 같은 방향으로 맞춰 보강 간섭으로 진폭을 키우고, 오답 항들은 위상이
+> 어긋나 상쇄 간섭으로 진폭을 없앤다.**
+
+그러면 측정했을 때 정답이 잘 나온다. 3장에서 "측정은 한 번에 하나만 알려 준다"고 한
+한계를 이렇게 돌파한다. **양자컴퓨팅이 빠른 이유는 모든 경우를 동시에 계산해서가 아니라,
+위상을 조작해서 정답 확률을 키울 수 있어서** 다.
+
+위상을 적기 위한 무대가 바로 복소수의 평면이다 — 그래서 양자에 복소수가 필요하다.
+
+<Callout kind="summary">
+- 양자 진폭 = **길이(크기)** 와 **방향(위상)** 두 정보 → 한 묶음으로 다루는 게 복소수
+- **측정 확률 = 길이의 제곱.** 측정 한 번으론 위상이 안 보인다
+- **항들이 합쳐질 때** 같은 위상끼리는 보강, 반대 위상끼리는 상쇄 — 이게 **간섭**
+- 양자 알고리즘 = 정답의 위상은 맞추고, 오답의 위상은 어긋나게 설계
+- 실수(`+`/`−`) 두 위상으로는 부족 → 단위 원 위 모든 방향이 필요 → **복소수**
+</Callout>
+
+## 벡터: 숫자를 세로로 쌓은 것
+
+**벡터(vector)** 는 그냥 숫자를 일렬로 나열한 것이다. 양자에서는 주로 **열벡터(column
+vector)** — 세로로 쌓은 형태 — 를 쓴다.
+
+$$
+\begin{bmatrix} a \\ b \end{bmatrix}
+$$
+
+가로로 누우면 **행벡터(row vector)** 다: `[ a  b  c ]`. 이 둘의 관계가 5장의 핵심이 된다.
+
+### 벡터 연산 네 가지
+
+**1. 스칼라 × 벡터** — 모든 원소에 똑같은 수를 곱한다.
+
+$$
+\alpha \begin{bmatrix} a \\ b \end{bmatrix} = \begin{bmatrix} \alpha a \\ \alpha b \end{bmatrix}
+$$
+
+**2. 벡터 + 벡터** — 같은 자리끼리 더한다.
+
+$$
+\begin{bmatrix} a \\ b \end{bmatrix} + \begin{bmatrix} x \\ y \end{bmatrix} = \begin{bmatrix} a + x \\ b + y \end{bmatrix}
+$$
+
+**3. 벡터의 norm(크기)** — 복소수 원소를 가질 수 있으므로, 각 원소의 **norm의 제곱** 을
+더한 뒤 제곱근을 씌운다.
+
+$$
+\left\lVert \begin{bmatrix} a \\ b \end{bmatrix} \right\rVert = \sqrt{|a|^2 + |b|^2}
+$$
+
+> 원소가 실수면 우리가 아는 피타고라스 거리와 똑같다. 원소가 복소수면 `|a|²`가 그
+> 복소수의 norm의 제곱이라는 점만 다르다.
+
+**4. 벡터의 내적(inner product)** — 두 벡터에서 실수(또는 복소수) 하나를 뽑아내는 연산.
+양자에서는 **한쪽 벡터의 원소에 켤레를 씌워서** 곱한 뒤 더한다.
+
+$$
+\begin{bmatrix} \alpha \\ \beta \end{bmatrix} \cdot \begin{bmatrix} \gamma \\ \delta \end{bmatrix} = \alpha\,\gamma^{*} + \beta\,\delta^{*}
+$$
+
+이 "켤레를 씌우는 내적"이 왜 중요한지는 다음 장에서 바로 쓰인다. 지금은 "양자의 내적은
+한쪽에 `*`가 붙는다" 정도만 기억하자.
+
+## 힐베르트 공간 — 이름만 알아 두기
+
+이런 벡터들이 사는 공간에 정식 이름이 있다. **힐베르트 공간(Hilbert space)** 이다.
+
+> 힐베르트 공간 = **내적이 정의된 벡터 공간**. 내적이 있으면 벡터의 길이와 두 벡터 사이의
+> 거리·각도를 잴 수 있다.
+
+겁먹을 필요 없다. 우리에게 힐베르트 공간이란 "복소수 원소를 가진 열벡터들의 모임"이고,
+그 안에서 더하기·스칼라 곱·내적이 된다는 뜻일 뿐이다. 양자 상태는 바로 이 공간의 한
+벡터다.
+
+<Callout kind="summary">
+- **복소수** `a + bi`: norm `|a+bi| = √(a²+b²)`, 켤레 `(a+bi)* = a−bi`, 그리고
+  `z·z* = |z|²`
+- **벡터**: 숫자를 세로로 쌓은 열벡터. 스칼라곱·덧셈·norm·내적이 정의됨
+- **내적** 은 한쪽 벡터에 **켤레** 를 씌워 곱하고 더한다
+- 양자 상태가 사는 곳 = **힐베르트 공간** (내적이 있는 벡터 공간)
+- 다음 장: 이 벡터를 양자식으로 적는 표기법 — **bra-ket**
+</Callout>

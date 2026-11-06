@@ -1,0 +1,185 @@
+이제 첫 번째 진짜 양자 알고리즘 — **Deutsch 알고리즘** 을 만든다. "고전 컴퓨터보다 적은
+횟수로 답을 낸다"는 양자 우위를 가장 단순하게 보여 주는 예제다. 그 비결은 **위상 킥백
+(phase kickback)** 이라는 트릭이다.
+
+## 문제: 이 함수는 상수일까, 균형일까?
+
+$f : \{0,1\} \to \{0,1\}$ 인 함수를 생각하자. 입력도 출력도 0 아니면 1이다. 이런 함수는
+딱 두 종류로 나뉜다.
+
+- **상수(constant) 함수**: 입력과 무관하게 출력이 일정. $f(0)=f(1)$ ($00$ 또는 $11$).
+- **균형(balanced) 함수**: 출력이 절반씩. $f(0) \ne f(1)$ ($01$ 또는 $10$).
+
+<Figure
+  src="/figures/ch11-constant-balanced.png"
+  caption="f:{0,1}→{0,1} 의 네 가지. 왼쪽 둘은 균형 함수(f(0)≠f(1)), 오른쪽 둘은 상수 함수(f(0)=f(1)). f 가 블랙박스일 때 어느 쪽인지 알아내는 게 문제."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+> **문제**: $f$ 가 블랙박스(내부를 모르는 함수)일 때, 그것이 **상수인지 균형인지** 판별하라.
+
+고전 컴퓨터로는 $f(0)$ 과 $f(1)$ 을 **둘 다** 확인해야 한다 — 함수를 **2번** 불러야 답이
+나온다. Deutsch 알고리즘은 이걸 **단 1번** 의 함수 호출로 푼다.
+
+## 오라클: 함수를 양자 게이트로
+
+양자 회로에서 함수 $f$ 는 **오라클(oracle)** 이라는 유니터리 게이트 $U_f$ 로 주어진다.
+
+$$
+U_f\,|x, y\rangle = |x,\; y \oplus f(x)\rangle
+$$
+
+입력 큐비트 $x$ 는 그대로 두고, 출력 큐비트 $y$ 에 $f(x)$ 를 XOR($\oplus$) 한다. ($\oplus$
+는 1부에서 본 XOR = mod 2 덧셈.) 가역적이라 유니터리 조건을 만족한다.
+
+## 핵심 트릭: 위상 킥백
+
+오라클의 출력 큐비트 $y$ 에 $|0\rangle$ 이나 $|1\rangle$ 대신 **$|-\rangle = \tfrac{1}{\sqrt 2}(|0\rangle - |1\rangle)$**
+를 넣어 보자. 그러면 신기한 일이 벌어진다.
+
+$$
+\begin{aligned}
+U_f\,|x\rangle|-\rangle &= U_f\,|x\rangle\,\tfrac{1}{\sqrt 2}\bigl(|0\rangle - |1\rangle\bigr) = \tfrac{1}{\sqrt 2}\bigl(|x, f(x)\rangle - |x, 1\oplus f(x)\rangle\bigr) \\
+&= (-1)^{f(x)}\,|x\rangle|-\rangle
+\end{aligned}
+$$
+
+확인해 보자. $f(x)=0$ 이면 그대로 $|x\rangle|-\rangle$, $f(x)=1$ 이면 $|0\rangle$ 과
+$|1\rangle$ 이 뒤바뀌어 $-|x\rangle|-\rangle$. 즉 부호가 $(-1)^{f(x)}$ 만큼 붙는다.
+
+> **위상 킥백**: 함수 값 $f(x)$ 가 출력 큐비트가 아니라 **입력 큐비트 $|x\rangle$ 의 위상
+> (부호)** 으로 튀어나온다. $U_f\,|x\rangle|-\rangle = (-1)^{f(x)}|x\rangle|-\rangle$.
+
+<Figure
+  src="/figures/ch11-phase-kickback.png"
+  caption="위상 킥백. 출력 큐비트를 |−⟩ 로 두면 오라클 Uf 가 f(x) 를 입력 큐비트의 부호 (−1)^f(x) 로 '되튕겨' 준다. 4장에서 본 위상이 여기서 결정적으로 쓰인다."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+<Callout kind="note">
+4장에서 "위상은 측정으론 안 보이지만 항이 합쳐질 때 결과를 가른다"고 했다. 위상 킥백은
+함수 정보를 바로 그 **위상** 에 심는 기술이다. 이제 H 게이트로 항을 합치면(간섭) 위상
+차이가 측정 결과로 드러난다.
+</Callout>
+
+## Deutsch 알고리즘
+
+조립은 이렇다.
+
+1. 입력 큐비트 $q_1$ 을 $|+\rangle$ 로, 출력 큐비트 $q_0$ 을 $|-\rangle$ 로 준비
+   (각각 $|0\rangle, |1\rangle$ 에 H).
+2. 오라클 $U_f$ 통과 → 위상 킥백으로 $q_1$ 에 $(-1)^{f(x)}$ 가 붙음.
+3. $q_1$ 에 다시 **H** 를 걸어 간섭시킴.
+4. $q_1$ 측정.
+
+### 식 전체 유도 — 한 줄도 빠짐없이
+
+위 네 단계를 식으로 처음부터 따라가 본다. ($q_1$ 큐비트를 왼쪽, $q_0$ 를 오른쪽으로 적는다.)
+
+#### 0단계 — 초기 상태
+
+$$
+|\psi_0\rangle = |0\rangle_1 \otimes |1\rangle_0
+$$
+
+#### 1단계 — 양쪽 큐비트에 H 적용
+
+$$
+\begin{aligned}
+|\psi_0'\rangle &= (H \otimes H)\,|\psi_0\rangle \\
+&= \bigl(H|0\rangle\bigr) \otimes \bigl(H|1\rangle\bigr) \\
+&= |+\rangle_1 \otimes |-\rangle_0 \\
+&= \tfrac{1}{\sqrt{2}}\bigl(|0\rangle_1 + |1\rangle_1\bigr) \otimes |-\rangle_0
+\end{aligned}
+$$
+
+#### 2단계 — 오라클 $U_f$ 통과 (위상 킥백)
+
+방금 본 $U_f|x\rangle|-\rangle = (-1)^{f(x)}|x\rangle|-\rangle$ 를 분배법칙으로 적용:
+
+$$
+\begin{aligned}
+|\psi_1\rangle &= U_f\,|\psi_0'\rangle \\
+&= U_f \cdot \tfrac{1}{\sqrt{2}}\bigl(|0\rangle_1 + |1\rangle_1\bigr) \otimes |-\rangle_0 \\
+&= \tfrac{1}{\sqrt{2}}\bigl(U_f\,|0\rangle_1|-\rangle_0 + U_f\,|1\rangle_1|-\rangle_0\bigr) \\
+&= \tfrac{1}{\sqrt{2}}\Bigl((-1)^{f(0)}|0\rangle_1 + (-1)^{f(1)}|1\rangle_1\Bigr) \otimes |-\rangle_0
+\end{aligned}
+$$
+
+> $f(x)$ 가 출력 큐비트가 아니라 **$q_1$ 의 각 항에 부호** 로 붙었다. 이게 위상 킥백.
+
+#### 3단계 — $q_1$ 에 다시 H ($q_0$ 는 그대로)
+
+$H|0\rangle = |+\rangle = \tfrac{1}{\sqrt 2}(|0\rangle+|1\rangle)$, $H|1\rangle = |-\rangle = \tfrac{1}{\sqrt 2}(|0\rangle-|1\rangle)$ 를 대입:
+
+$$
+\begin{aligned}
+|\psi_2\rangle &= (H \otimes I)\,|\psi_1\rangle \\
+&= \tfrac{1}{\sqrt{2}}\Bigl((-1)^{f(0)}H|0\rangle + (-1)^{f(1)}H|1\rangle\Bigr) \otimes |-\rangle_0 \\
+&= \tfrac{1}{\sqrt{2}}\Bigl((-1)^{f(0)}|+\rangle + (-1)^{f(1)}|-\rangle\Bigr) \otimes |-\rangle_0 \\
+&= \tfrac{1}{2}\Bigl[(-1)^{f(0)}(|0\rangle+|1\rangle) + (-1)^{f(1)}(|0\rangle-|1\rangle)\Bigr] \otimes |-\rangle_0
+\end{aligned}
+$$
+
+같은 자리(같은 ket) 끼리 모으면:
+
+$$
+|\psi_2\rangle = \tfrac{1}{2}\Bigl[\underbrace{\bigl((-1)^{f(0)} + (-1)^{f(1)}\bigr)}_{|0\rangle \text{ 계수}}\,|0\rangle + \underbrace{\bigl((-1)^{f(0)} - (-1)^{f(1)}\bigr)}_{|1\rangle \text{ 계수}}\,|1\rangle\Bigr] \otimes |-\rangle_0
+$$
+
+#### 4단계 — 두 가지 경우로 갈린다
+
+**경우 A — 상수 함수 ($f(0) = f(1)$)**: 두 부호가 같으니 $(-1)^{f(0)} = (-1)^{f(1)}$.
+
+$$
+\begin{aligned}
+|0\rangle \text{ 계수} &= (-1)^{f(0)} + (-1)^{f(0)} = 2\,(-1)^{f(0)} \\
+|1\rangle \text{ 계수} &= (-1)^{f(0)} - (-1)^{f(0)} = 0 \\
+\Rightarrow\;\; |\psi_2\rangle &= (-1)^{f(0)}\,|0\rangle_1 \otimes |-\rangle_0
+\end{aligned}
+$$
+
+→ $q_1$ 측정값 **0** (보강 간섭으로 $|0\rangle$ 만 살아남음).
+
+**경우 B — 균형 함수 ($f(0) \ne f(1)$)**: $(-1)^{f(0)} = -(-1)^{f(1)}$.
+
+$$
+\begin{aligned}
+|0\rangle \text{ 계수} &= (-1)^{f(0)} + \bigl(-(-1)^{f(0)}\bigr) = 0 \\
+|1\rangle \text{ 계수} &= (-1)^{f(0)} - \bigl(-(-1)^{f(0)}\bigr) = 2\,(-1)^{f(0)} \\
+\Rightarrow\;\; |\psi_2\rangle &= (-1)^{f(0)}\,|1\rangle_1 \otimes |-\rangle_0
+\end{aligned}
+$$
+
+→ $q_1$ 측정값 **1** ($|0\rangle$ 이 상쇄 간섭으로 죽고 $|1\rangle$ 만 남음).
+
+<Callout kind="summary" title="결과 한 줄로">
+- $f(0) = f(1)$ (**상수**) → $q_1$ 측정 = **0**
+- $f(0) \ne f(1)$ (**균형**) → $q_1$ 측정 = **1**
+
+4장의 보강·상쇄 간섭이 그대로 작동했다. 같은 위상은 모여서 살고, 반대 위상은 빠져서 사라진다.
+</Callout>
+
+<Figure
+  src="/figures/ch11-deutsch-output.png"
+  caption="Deutsch 알고리즘. q₁ 측정값이 0이면 상수 함수, 1이면 균형 함수. 오라클을 단 한 번 호출하고 측정 한 번으로 판별 — 고전(2회 호출) 대비 양자 우위."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+> **결과**: 측정값이 `0` 이면 상수, `1` 이면 균형. 오라클을 **단 한 번** 만 호출했다 —
+> 고전 컴퓨터가 2번 호출해야 했던 일을 1번에 끝낸 것이다.
+
+<Callout kind="tip">
+Deutsch 알고리즘의 속도 향상(2배)은 사소해 보이지만, 그 구조 — **모든 입력을 중첩으로
+넣고(H), 오라클이 위상에 정보를 심고(킥백), 다시 간섭시켜(H) 답만 남긴다** — 가 모든
+양자 알고리즘의 뼈대다. 다음 장의 Grover, 그리고 Shor 의 인수분해도 같은 골격이다.
+</Callout>
+
+<Callout kind="summary">
+- 문제: $f:\{0,1\}\to\{0,1\}$ 가 **상수**($f(0)=f(1)$)인지 **균형**($f(0)\ne f(1)$)인지 판별
+- **오라클** $U_f|x,y\rangle = |x, y\oplus f(x)\rangle$ — 함수를 유니터리 게이트로
+- **위상 킥백**: 출력 큐비트를 $|-\rangle$ 로 두면 $U_f|x\rangle|-\rangle = (-1)^{f(x)}|x\rangle|-\rangle$ — 함수 값이 위상으로
+- **Deutsch**: H → 오라클(킥백) → H → 측정. 측정값 0=상수, 1=균형. 오라클 **1회** 호출
+- 골격: 중첩 → 위상에 정보 심기 → 간섭으로 답 추출
+- 다음 장: 같은 골격으로 거대한 탐색을 빠르게 — **Grover 알고리즘**
+</Callout>

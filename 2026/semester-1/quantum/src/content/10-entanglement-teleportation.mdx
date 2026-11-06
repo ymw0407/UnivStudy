@@ -1,0 +1,126 @@
+2부에서 큐비트·게이트·측정을 전부 벡터와 행렬로 정리했다. 3부에서는 그 도구로 진짜 **양자
+알고리즘** 을 만든다. 첫 번째 재료는 양자컴퓨팅에서 가장 신비로운 현상 — **얽힘
+(entanglement)** 이다.
+
+## 분리 가능 상태 vs 얽힌 상태
+
+8장에서 2큐비트 상태는 두 1큐비트의 텐서곱으로 만들 수 있었다 ($|0\rangle \otimes |1\rangle$
+등). 그런데 **모든** 2큐비트 상태가 그렇게 쪼개지는 것은 아니다.
+
+> - **분리 가능(separable) 상태**: $|\psi\rangle_1 \otimes |\phi\rangle_0$ 처럼 두 큐비트의
+>   곱으로 적을 수 있는 상태.
+> - **얽힌(entangled) 상태**: 아무리 해도 $|\psi\rangle_1 \otimes |\phi\rangle_0$ 꼴로
+>   쪼갤 수 없는 상태.
+
+가장 유명한 얽힌 상태가 **Bell 상태(Bell state, EPR 쌍)** 다. 2큐비트의 최대로 얽힌 네
+상태를 말한다.
+
+$$
+\begin{aligned}
+|\Phi^{+}\rangle &= \tfrac{1}{\sqrt{2}}\bigl(|00\rangle + |11\rangle\bigr), &
+|\Phi^{-}\rangle &= \tfrac{1}{\sqrt{2}}\bigl(|00\rangle - |11\rangle\bigr) \\[2pt]
+|\Psi^{+}\rangle &= \tfrac{1}{\sqrt{2}}\bigl(|01\rangle + |10\rangle\bigr), &
+|\Psi^{-}\rangle &= \tfrac{1}{\sqrt{2}}\bigl(|01\rangle - |10\rangle\bigr)
+\end{aligned}
+$$
+
+<Callout kind="note">
+**왜 $|\Phi^{+}\rangle$ 는 쪼갤 수 없나?** $|\Phi^{+}\rangle = (a|0\rangle+b|1\rangle)\otimes(c|0\rangle+d|1\rangle)$
+로 쪼개진다고 가정하면, 전개했을 때 $|01\rangle$ 항의 계수 $ad$ 와 $|10\rangle$ 항의 계수
+$bc$ 가 둘 다 0이어야 한다. 그런데 $|00\rangle$ 계수 $ac$ 와 $|11\rangle$ 계수 $bd$ 는
+0이 아니어야 하니 모순이다. 그래서 분해 불가능 — 얽힘이다.
+</Callout>
+
+## 얽힘의 의미: 떼어 놓을 수 없는 상관관계
+
+얽힌 두 큐비트는 아무리 멀리 떨어져 있어도 하나로 묶여 있다. $|\Phi^{+}\rangle$ 을
+측정하면:
+
+- 첫 큐비트가 0이면 → 둘째도 **반드시** 0
+- 첫 큐비트가 1이면 → 둘째도 **반드시** 1
+
+한쪽을 측정하는 순간 다른 쪽 결과가 즉시 정해진다. 두 큐비트가 독립적인 두 동전이 아니라,
+**하나의 묶인 상태** 라는 뜻이다.
+
+## Bell 상태 만들기 — H + CX
+
+Bell 상태는 1부에서 본 게이트 두 개로 간단히 만든다. **H 게이트로 중첩을 만들고, CX
+게이트로 두 큐비트를 묶는다.**
+
+$$
+|0\rangle_1 |0\rangle_0 \;\xrightarrow{\;H \otimes I\;}\; \tfrac{1}{\sqrt{2}}\bigl(|0\rangle+|1\rangle\bigr)_1 |0\rangle_0 \;\xrightarrow{\;CX_{10}\;}\; \tfrac{1}{\sqrt{2}}\bigl(|00\rangle + |11\rangle\bigr)
+$$
+
+CX 가 control($q_1$)이 1일 때만 target($q_0$)을 뒤집으므로, $|10\rangle$ 항이 $|11\rangle$
+로 바뀌면서 두 큐비트가 묶인다.
+
+<Figure
+  src="/figures/ch10-bell-creation.png"
+  caption="Bell 상태 생성 회로. q₁에 H 를 걸어 중첩을 만든 뒤 CX(control q₁, target q₀) 로 두 큐비트를 얽는다. 왼쪽 Statevector 막대가 00·11 두 곳에만 서 있다 — 얽힌 상태."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+## 양자 텔레포테이션
+
+이름은 거창하지만 물건을 순간이동시키는 게 아니다. **양자 상태(정보)** 를 한 곳에서 다른
+곳으로 옮기는 기술이다.
+
+> **상황**: Alice 가 큐비트 하나를 $|\psi\rangle = \alpha|0\rangle + \beta|1\rangle$ 상태로
+> 가지고 있다. 그런데 **$\alpha, \beta$ 가 뭔지는 모른다.** 이 상태를 멀리 있는 Bob 의
+> 큐비트로 그대로 옮기고 싶다. 단, 큐비트를 직접 보낼 수는 없고 **고전 정보(전화 통화)** 만
+> 보낼 수 있다.
+
+준비물: Alice 와 Bob 이 미리 **얽힌 쌍** $|\Phi\rangle_{ba} = \tfrac{1}{\sqrt{2}}(|0\rangle_b|0\rangle_a + |1\rangle_b|1\rangle_a)$
+을 하나씩 나눠 가진다.
+
+<Callout kind="warn">
+$\alpha, \beta$ 를 측정해서 알아낸 뒤 전화로 불러 주면 되지 않나? 안 된다. 측정하면 상태가
+무너져서(3장) $\alpha, \beta$ 를 정확히 알 수 없고, 양자 상태는 **복제도 불가능**
+(no-cloning 정리)하다. 텔레포테이션은 이 두 한계를 우회한다.
+</Callout>
+
+### 프로토콜
+
+1. Alice 는 자기 두 큐비트(옮길 $|\psi\rangle$ 와 얽힌 쌍의 자기 몫)에 **CX** 를 건다
+   ($|\psi\rangle$ 가 control).
+2. 이어서 $|\psi\rangle$ 큐비트에 **H** 를 건다.
+3. Alice 가 자기 **두 큐비트를 측정** 한다 → 결과는 `00`, `01`, `10`, `11` 중 하나 (고전
+   2비트).
+4. Alice 가 그 2비트를 **전화로** Bob 에게 알려 준다.
+5. Bob 은 받은 2비트에 따라 자기 큐비트에 보정 게이트를 건다.
+
+측정 결과별로 Bob 의 큐비트가 어떤 상태인지, 그리고 어떤 보정을 해야 하는지:
+
+$$
+\begin{aligned}
+\text{``00''} &\Rightarrow \alpha|0\rangle + \beta|1\rangle \;\;&\Rightarrow\;& \text{보정 없음} \\
+\text{``10''} &\Rightarrow \alpha|1\rangle + \beta|0\rangle \;\;&\Rightarrow\;& X \text{ 적용} \\
+\text{``01''} &\Rightarrow \alpha|0\rangle - \beta|1\rangle \;\;&\Rightarrow\;& Z \text{ 적용} \\
+\text{``11''} &\Rightarrow \alpha|1\rangle - \beta|0\rangle \;\;&\Rightarrow\;& ZX \text{ 적용}
+\end{aligned}
+$$
+
+보정을 마치면 Bob 의 큐비트는 정확히 $|\psi\rangle = \alpha|0\rangle + \beta|1\rangle$ 이 된다.
+
+<Figure
+  src="/figures/ch10-teleportation-protocol.png"
+  caption="텔레포테이션 전체 회로. Alice 는 CX·H 뒤 두 큐비트를 측정해 고전 2비트를 얻고, 전화로 Bob 에게 전달. Bob 은 그 2비트에 따라 X·Z 보정을 걸어 |ψ⟩ 를 복원한다."
+  source="「프로그래밍으로 배우는 양자컴퓨팅」 강의자료"
+/>
+
+<Callout kind="tip">
+핵심은 세 가지다. ① Alice 는 $|\psi\rangle$ 의 정체($\alpha, \beta$)를 **끝까지 모른다**.
+② Bob 도 측정 전까진 모른다 — 그래서 정보가 새지 않는다. ③ 고전 2비트만으로 임의의 양자
+상태(복소수 두 개)가 옮겨진다. 단, 보정에 그 고전 2비트가 **반드시** 필요하므로, 정보가
+빛보다 빠르게 전달되는 것은 아니다.
+</Callout>
+
+<Callout kind="summary">
+- **얽힌 상태** = $|\psi\rangle \otimes |\phi\rangle$ 로 쪼갤 수 없는 2큐비트 상태. 대표가
+  **Bell 상태** 네 가지
+- Bell 상태 만들기 = **H + CX** (중첩 → 얽기)
+- **텔레포테이션**: 미리 나눠 가진 얽힌 쌍 + 고전 2비트로, 모르는 양자 상태 $|\psi\rangle$ 를
+  Bob 에게 전달. Bob 은 받은 2비트에 따라 $I/X/Z/ZX$ 보정
+- no-cloning 을 어기지 않고, 빛보다 빠르지도 않다 (고전 통신이 필요)
+- 다음 장: 알고리즘의 첫 트릭 — **위상 킥백** 과 Deutsch 알고리즘
+</Callout>
